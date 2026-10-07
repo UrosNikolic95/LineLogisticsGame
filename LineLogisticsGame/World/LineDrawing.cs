@@ -260,6 +260,15 @@ namespace LineLogisticsGame.World
             RebuildConnections();
         }
 
+        // Replaces every line with the ones of a saved game; the undo history starts over.
+        public void Load(Vector2[] points, (int A, int B, Color Color, float Width, int Group, LineKind Kind, int Type)[] segments)
+        {
+            Restore(new Snapshot(points, segments));
+            undo.Clear();
+            redo.Clear();
+            lastGroup = Segments.Select(s => s.Group).DefaultIfEmpty(0).Max();
+        }
+
         #endregion
 
         #region Drawing

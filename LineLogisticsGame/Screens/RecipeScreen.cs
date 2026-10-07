@@ -113,6 +113,7 @@ namespace LineLogisticsGame.Screens
             DrawButton(randomizeButton, randomizeHovered, "Randomize", Text);
             DrawButton(startButton, startHovered, "Start", Text);
 
+            DrawShape.Flush();
             spriteBatch.Begin();
             foreach (var (text, position, color) in texts)
                 spriteBatch.DrawString(font, text, new Vector2(MathF.Round(position.X), MathF.Round(position.Y)), color);

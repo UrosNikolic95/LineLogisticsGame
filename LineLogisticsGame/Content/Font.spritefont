@@ -11,6 +11,11 @@
         <Start>&#32;</Start>
         <End>&#126;</End>
       </CharacterRegion>
+      <!-- Latin Extended-A (š, ć, č, ž, đ, ...) -->
+      <CharacterRegion>
+        <Start>&#256;</Start>
+        <End>&#383;</End>
+      </CharacterRegion>
     </CharacterRegions>
   </Asset>
 </XnaContent>

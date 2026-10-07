@@ -40,8 +40,20 @@ namespace LineLogisticsGame.Simulation
 
         private readonly Dictionary<StyledSegment, float> timers = new Dictionary<StyledSegment, float>();
         private readonly Random random = new Random();
-        private Dictionary<Transporter, List<(Vector2 Position, float Radius)>> occupied = new Dictionary<Transporter, List<(Vector2, float)>>();
+        private Dictionary<Transporter, Occupancy> occupied = new Dictionary<Transporter, Occupancy>();
         private LineDrawing drawing;
+        private HashSet<StyledSegment> alive = new HashSet<StyledSegment>();    // drawing.Segments, for fast lookups
+
+        // Resources grouped by the line they lie on (see OnLine). Kept up to date as resources are added and removed here;
+        // rebuilt when stale: at the start of every update and after resources moved to other lines.
+        private readonly Dictionary<StyledSegment, List<Resource>> resourceIndex = new Dictionary<StyledSegment, List<Resource>>();
+        private bool resourceIndexStale = true;
+        private static readonly List<Resource> noResources = new List<Resource>();
+
+        // walkable roads leaving each point (from A to B), in drawing order, and input lines by group; rebuilt every update (see IndexLines)
+        private Dictionary<Point, List<StyledSegment>> roadsFrom = new Dictionary<Point, List<StyledSegment>>();
+        private Dictionary<int, List<StyledSegment>> inputLines = new Dictionary<int, List<StyledSegment>>();    // by Group
+        private static readonly List<StyledSegment> noRoads = new List<StyledSegment>();
 
         // lines transporters pick up from, and the type of resource they hold
         public bool IsSource(StyledSegment segment) => segment.Kind == LineKind.Output;
@@ -124,6 +136,11 @@ namespace LineLogisticsGame.Simulation
         public void Update(GameTime gameTime, LineDrawing drawing)
         {
             this.drawing = drawing;
+            // the lines only change between updates (tools, undo, loading), so these hold for the whole update
+            alive = new HashSet<StyledSegment>(drawing.Segments);
+            IndexLines();
+            resourceIndexStale = true;  // resources may have been added from outside (loading a game)
+
             Reattach(drawing);
             RescheduleAll();
 
@@ -151,7 +168,7 @@ namespace LineLogisticsGame.Simulation
 
         private void UpdateTimers(LineDrawing drawing, float dt)
         {
-            foreach (var removed in timers.Keys.Where(s => !drawing.Segments.Contains(s)).ToList())
+            foreach (var removed in timers.Keys.Where(s => !alive.Contains(s)).ToList())
                 timers.Remove(removed);
 
             foreach (var segment in drawing.Segments)
@@ -190,8 +207,8 @@ namespace LineLogisticsGame.Simulation
             var taken = new List<Resource>();
             foreach (int type in required)
             {
-                Resource resource = drawing.Segments
-                    .Where(s => s.Group == segment.Group && s.Kind == LineKind.Input && s.Type == type)
+                Resource resource = InputLinesOf(segment.Group)
+                    .Where(s => s.Type == type)
                     .Select(OldestOn)
                     .FirstOrDefault(r => r != null);
                 if (resource == null) return false;
@@ -215,7 +232,7 @@ namespace LineLogisticsGame.Simulation
         private bool TrySpawn(StyledSegment segment, int type)
         {
             if (SpawnDistance(segment) is not float at) return false;
-            Resources.Add(new Resource { Type = type, Segment = segment, Distance = at, Position = PositionOn(segment, at) });
+            AddResource(new Resource { Type = type, Segment = segment, Distance = at, Position = PositionOn(segment, at) });
             return true;
         }
 
@@ -223,8 +240,8 @@ namespace LineLogisticsGame.Simulation
         private float? SpawnDistance(StyledSegment segment)
         {
             var (start, end) = ConveyorEnds(segment);
-            var onLine = Resources.Where(r => r.Segment == segment).Select(r => r.Distance).Concat(TowedOn(segment)).ToList();
-            float at = onLine.Count == 0 ? end : onLine.Min() - ResourceSpacing;
+            float nearestA = OnLine(segment).Select(r => r.Distance).Concat(TowedOn(segment)).DefaultIfEmpty(float.NaN).Min();
+            float at = float.IsNaN(nearestA) ? end : nearestA - ResourceSpacing;
             return at < start - 0.01f ? null : at;
         }
 
@@ -251,7 +268,7 @@ namespace LineLogisticsGame.Simulation
 
         // where the resources being pulled off a green line still are on it
         private IEnumerable<float> TowedOn(StyledSegment segment) =>
-            Transporters.SelectMany(t => t.Towing).Where(x => x.Resource.Segment == segment).Select(x => x.Resource.Distance);
+            Transporters.Where(t => t.TowSegment == segment).SelectMany(t => t.Towing).Where(x => x.Resource.Segment == segment).Select(x => x.Resource.Distance);
 
         // Red lines are queues: deliveries come in at one end and push the resources already there deeper,
         // and the resource that got pushed farthest (the oldest) is consumed at the other end, once it has rolled into its place.
@@ -298,7 +315,7 @@ namespace LineLogisticsGame.Simulation
             return fromB ? length - distance : distance;
         }
 
-        private int FreeSlotCount(StyledSegment segment) => Math.Max(0, SlotCount(segment) - Resources.Count(r => r.Segment == segment));
+        private int FreeSlotCount(StyledSegment segment) => Math.Max(0, SlotCount(segment) - OnLine(segment).Count);
 
         // Unloaded resources roll along their path, then to their spot on the red line.
         private void RollIn(float dt)
@@ -333,12 +350,42 @@ namespace LineLogisticsGame.Simulation
         private void RemoveResource(Resource resource)
         {
             Resources.Remove(resource);
+            if (!resourceIndexStale && resource.Segment != null && resourceIndex.TryGetValue(resource.Segment, out var list))
+                list.Remove(resource);
+        }
+
+        private void AddResource(Resource resource)
+        {
+            Resources.Add(resource);
+            if (resourceIndexStale || resource.Segment == null) return;
+            if (!resourceIndex.TryGetValue(resource.Segment, out var list)) resourceIndex[resource.Segment] = list = new List<Resource>();
+            list.Add(resource);
+        }
+
+        // resources on a line, in no particular order; not to be changed or kept
+        private List<Resource> OnLine(StyledSegment segment)
+        {
+            if (resourceIndexStale)
+            {
+                foreach (var list in resourceIndex.Values) list.Clear();
+                foreach (var resource in Resources)
+                {
+                    if (resource.Segment == null) continue;
+                    if (!resourceIndex.TryGetValue(resource.Segment, out var list)) resourceIndex[resource.Segment] = list = new List<Resource>();
+                    list.Add(resource);
+                }
+                // forget lines that are gone
+                foreach (var gone in resourceIndex.Where(e => e.Value.Count == 0 && !alive.Contains(e.Key)).Select(e => e.Key).ToList())
+                    resourceIndex.Remove(gone);
+                resourceIndexStale = false;
+            }
+            return resourceIndex.TryGetValue(segment, out var found) ? found : noResources;
         }
 
         // resources on a line, last (farthest from A) first
         private List<Resource> ResourcesOn(StyledSegment segment)
         {
-            return Resources.Where(r => r.Segment == segment).OrderByDescending(r => r.Distance).ToList();
+            return OnLine(segment).OrderByDescending(r => r.Distance).ToList();
         }
 
         // Keeps SourceLines and SinkLines in sync with the green and red lines.
@@ -351,13 +398,13 @@ namespace LineLogisticsGame.Simulation
 
             foreach (var (segment, line) in SourceLines.ToList())
             {
-                if (drawing.Segments.Contains(segment) && IsSource(segment)) continue;
+                if (alive.Contains(segment) && IsSource(segment)) continue;
                 foreach (var t in line.Scheduled.ToList()) ClearPlan(t);
                 SourceLines.Remove(segment);
             }
             foreach (var (segment, line) in SinkLines.ToList())
             {
-                if (drawing.Segments.Contains(segment) && IsSink(segment)) continue;
+                if (alive.Contains(segment) && IsSink(segment)) continue;
                 foreach (var t in line.Scheduled.ToList()) ClearPlan(t);
                 SinkLines.Remove(segment);
             }
@@ -622,7 +669,7 @@ namespace LineLogisticsGame.Simulation
             for (int i = 0; i < block.Count; i++)
             {
                 Resource resource = block[i];
-                Resources.Remove(resource);
+                RemoveResource(resource);
                 resource.ReservedBy = null;
                 resource.Path = null;
                 int wagon = t.FirstLoaded + t.Load + i;
@@ -711,7 +758,7 @@ namespace LineLogisticsGame.Simulation
                 // one still being pulled toward its wagon starts from where it is
                 var towed = t.Towing.FirstOrDefault(x => x.Wagon == t.FirstLoaded + i).Resource;
                 Vector2 start = towed?.Position ?? PointAlong(path, along);
-                Resources.Add(new Resource { Type = t.CargoType, Segment = t.DropSegment, Distance = distance, Position = start, Path = waypoints, Speed = speed });
+                AddResource(new Resource { Type = t.CargoType, Segment = t.DropSegment, Distance = distance, Position = start, Path = waypoints, Speed = speed });
             }
             t.Towing.RemoveAll(x => x.Wagon < t.FirstLoaded + count);
             if (t.Towing.Count == 0) StopTowing(t);
@@ -866,12 +913,24 @@ namespace LineLogisticsGame.Simulation
             occupied[t] = Occupied(t);
         }
 
-        // where its body and its wagons are
-        private List<(Vector2 Position, float Radius)> Occupied(Transporter t)
+        // where a transporter's body and wagons are, and the box around their centers (so whole transporters far away are skipped)
+        private class Occupancy
+        {
+            public List<(Vector2 Position, float Radius)> Places;
+            public Vector2 Min, Max;
+        }
+
+        private Occupancy Occupied(Transporter t)
         {
             var places = new List<(Vector2, float)> { (t.position, t.radius) };
-            foreach (var wagon in WagonPositions(t)) places.Add((wagon, ResourceRadius));
-            return places;
+            Vector2 min = t.position, max = t.position;
+            foreach (var wagon in WagonPositions(t))
+            {
+                places.Add((wagon, ResourceRadius));
+                min = Vector2.Min(min, wagon);
+                max = Vector2.Max(max, wagon);
+            }
+            return new Occupancy { Places = places, Min = min, Max = max };
         }
 
         // How far it can drive along its route, at most wanted: along each line of the route it looks for the nearest
@@ -910,11 +969,18 @@ namespace LineLogisticsGame.Simulation
                 int sign = Math.Sign(to - distance);
                 if (sign != 0)
                 {
-                    foreach (var (other, places) in occupied)
+                    // only something within this box can hold it up: the part of the line ahead of it that it may still
+                    // reach (see Limit), plus the room both need; the cheap box test skips most places
+                    float window = Math.Max(0, Math.Min(span, free - walked)) + reach;
+                    Vector2 near = PositionOn(segment, distance), far = PositionOn(segment, distance + sign * window);
+                    Vector2 min = Vector2.Min(near, far) - new Vector2(0.6f), max = Vector2.Max(near, far) + new Vector2(0.6f);
+
+                    foreach (var (other, occupancy) in occupied)
                     {
-                        if (other == t) continue;
-                        foreach (var (position, radius) in places)
+                        if (other == t || occupancy.Max.X < min.X || occupancy.Min.X > max.X || occupancy.Max.Y < min.Y || occupancy.Min.Y > max.Y) continue;
+                        foreach (var (position, radius) in occupancy.Places)
                         {
+                            if (position.X < min.X || position.X > max.X || position.Y < min.Y || position.Y > max.Y) continue;
                             if (!IsOn(segment, position)) continue;
                             float ahead = (ProjectDistance(segment, position) - distance) * sign;
                             float clearance = t.radius + radius + TransporterGap;
@@ -1029,8 +1095,8 @@ namespace LineLogisticsGame.Simulation
             }
 
             Point point = toA ? t.Segment.A : t.Segment.B;
-            StyledSegment next = drawing.Segments
-                .Where(s => s != t.Segment && s.A == point && IsWalkable(s))
+            StyledSegment next = RoadsFrom(point)
+                .Where(s => s != t.Segment)
                 .OrderBy(s => Transporters.Count(o => o != t && o.Segment == s))
                 .FirstOrDefault();
             if (next == null) return;
@@ -1097,15 +1163,6 @@ namespace LineLogisticsGame.Simulation
             var stopped = new HashSet<StyledSegment>(Transporters.Where(o => o != self && IsStopped(o)).Select(o => o.Segment));
             float Cost(StyledSegment s) => Length(s) + (stopped.Contains(s) ? StoppedPenalty : 0);
 
-            var edges = new Dictionary<Point, List<(StyledSegment Segment, Point To)>>();
-            void AddEdge(Point from, StyledSegment s, Point to)
-            {
-                if (!edges.TryGetValue(from, out var list)) edges[from] = list = new List<(StyledSegment, Point)>();
-                list.Add((s, to));
-            }
-            foreach (var s in drawing.Segments.Where(IsWalkable))
-                AddEdge(s.A, s, s.B);
-
             var result = new SearchResult();
             var queue = new PriorityQueue<Point, float>();
             void Relax(Point point, float cost, Point from, StyledSegment via)
@@ -1121,12 +1178,37 @@ namespace LineLogisticsGame.Simulation
 
             while (queue.TryDequeue(out Point point, out float cost))
             {
-                if (cost > result.Cost[point] || !edges.TryGetValue(point, out var list)) continue;
-                foreach (var (s, to) in list)
-                    Relax(to, cost + Cost(s), point, s);
+                if (cost > result.Cost[point]) continue;
+                foreach (var s in RoadsFrom(point))
+                    Relax(s.B, cost + Cost(s), point, s);
             }
             return result;
         }
+
+        // Lookups over the lines that hold for a whole update (the lines only change between updates).
+        private void IndexLines()
+        {
+            roadsFrom = new Dictionary<Point, List<StyledSegment>>();
+            inputLines = new Dictionary<int, List<StyledSegment>>();
+            foreach (var s in drawing.Segments)
+            {
+                if (IsWalkable(s))
+                {
+                    if (!roadsFrom.TryGetValue(s.A, out var roads)) roadsFrom[s.A] = roads = new List<StyledSegment>();
+                    roads.Add(s);
+                }
+                else if (s.Kind == LineKind.Input && s.Group != 0)
+                {
+                    if (!inputLines.TryGetValue(s.Group, out var inputs)) inputLines[s.Group] = inputs = new List<StyledSegment>();
+                    inputs.Add(s);
+                }
+            }
+        }
+
+        private List<StyledSegment> RoadsFrom(Point point) => roadsFrom.TryGetValue(point, out var list) ? list : noRoads;
+
+        // input lines built together with an output line (same Group), in drawing order
+        private List<StyledSegment> InputLinesOf(int group) => inputLines.TryGetValue(group, out var list) ? list : noRoads;
 
         // Where to stop to load or unload at a green or red line: having driven to one of the given ends along a road,
         // a bit onto a road going on from there, just far enough that its first wagon is at that end.
@@ -1141,9 +1223,9 @@ namespace LineLogisticsGame.Simulation
                 StyledSegment arrivedBy = search.Previous[end].Via;
                 if (arrivedBy == segment) continue;
 
-                foreach (var road in drawing.Segments)
+                foreach (var road in RoadsFrom(end))
                 {
-                    if (road.A != end || road == arrivedBy || !IsWalkable(road)) continue;
+                    if (road == arrivedBy) continue;
 
                     float into = Math.Min(FirstWagonOffset, Length(road));
                     if (cost + into >= best.Cost) continue;
@@ -1180,7 +1262,7 @@ namespace LineLogisticsGame.Simulation
 
         private static float Length(StyledSegment segment) => Vector2.Distance(segment.A.position, segment.B.position);
 
-        private static Vector2 PositionOn(StyledSegment segment, float distance)
+        public static Vector2 PositionOn(StyledSegment segment, float distance)
         {
             float length = Length(segment);
             if (length <= 0) return segment.A.position;
@@ -1198,8 +1280,6 @@ namespace LineLogisticsGame.Simulation
         // Dots on a line that no longer exists move to the line now under them, or disappear.
         private void Reattach(LineDrawing drawing)
         {
-            var alive = new HashSet<StyledSegment>(drawing.Segments);
-
             foreach (var depot in Depots.Where(d => !alive.Contains(d.Segment)).ToList())
             {
                 StyledSegment segment = drawing.FindSegment(depot.Position, 2f);
@@ -1215,6 +1295,7 @@ namespace LineLogisticsGame.Simulation
                 resource.Segment = segment;
                 resource.Distance = ProjectDistance(segment, resource.Position);
             }
+            resourceIndexStale = true;  // some may have moved to another line
 
             foreach (var t in Transporters.ToList())
             {

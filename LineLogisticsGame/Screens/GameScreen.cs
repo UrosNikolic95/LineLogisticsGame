@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -18,7 +19,7 @@ namespace LineLogisticsGame.Screens
     //   1 Road, 2 Producer, 3 Consumer, 4 Polyline, 5 Select/move, 6 Erase, 7 Transporter, 8 Depot   Space: pause
     //   Shift: snap angle   G: grid   L: snap to lines (split)
     //   Middle mouse drag: pan   Wheel or +/-: zoom (wheel only when the tool does not use it)   Mouse at a screen edge: scroll
-    //   Ctrl+Z / Ctrl+Y: undo / redo   Delete: clear   Esc: cancel (or exit when idle)
+    //   Ctrl+Z / Ctrl+Y: undo / redo   Delete: clear   Esc: cancel (or open the in-game menu when idle)   F5: save
     //   Transporter tool: wheel or Up/Down: capacity   Shift+wheel or Left/Right: speed (also on the palette)
     //   Depot tool: the same, plus Ctrl+wheel or PageUp/PageDown: interval between transporters,
     //     Alt+wheel or Home/End: most transporters out at once (over a depot: changes that depot)
@@ -26,18 +27,31 @@ namespace LineLogisticsGame.Screens
     {
         private readonly LineDrawing drawing = new LineDrawing();
         private readonly Camera camera = new Camera();
+
+        // for saving and loading (see SaveGame)
+        public LineDrawing Drawing => drawing;
+        public Camera Camera => camera;
+        public Rectangle MenuButton => menuButton;
         private readonly TransportSystem transport;
-        private readonly Action exit;
+        private readonly Action openMenu;   // the in-game menu (Menu button or Esc)
+        private const int MenuButtonWidth = 70, MenuButtonHeight = 24;
+        private Rectangle menuButton;
+        private bool menuButtonHovered;
         private readonly ITool[] tools;
         private readonly ToolPalette palette;
         private ITool currentTool;
         private int selectedResource = 1;
         private string status = "";
 
-        public GameScreen(TransportSystem transport, Action exit)
+        // frames drawn per second, counted over half a second of real time
+        private readonly Stopwatch fpsClock = Stopwatch.StartNew();
+        private int framesCounted;
+        private float fps;
+
+        public GameScreen(TransportSystem transport, Action openMenu)
         {
             this.transport = transport;
-            this.exit = exit;
+            this.openMenu = openMenu;
 
             var transporterTool = new TransporterTool(transport);
             var depotTool = new DepotTool(transport);
@@ -117,7 +131,7 @@ namespace LineLogisticsGame.Screens
             if (input.KeyPressed(Keys.Escape))
             {
                 if (currentTool.IsBusy) currentTool.Cancel();
-                else exit();
+                else openMenu();
             }
 
             HandleShortcuts(input);
@@ -130,13 +144,17 @@ namespace LineLogisticsGame.Screens
             input.Camera = camera;
             drawing.PixelSize = 1f / camera.Zoom;
 
+            menuButton = new Rectangle(viewport.Width - ToolPalette.Width - MenuButtonWidth - 6, 4, MenuButtonWidth, MenuButtonHeight);
+            menuButtonHovered = menuButton.Contains(input.ScreenMousePosition);
+
             if (isActive)
             {
-                // Clicks on the palette never reach the tool, but a drag that is already in progress keeps going.
-                bool overPalette = palette.Contains(input.ScreenMousePosition);
+                // Clicks on the palette and the menu button never reach the tool, but a drag that is already in progress keeps going.
+                bool overPalette = palette.Contains(input.ScreenMousePosition) || menuButtonHovered;
                 palette.Update(input, !currentTool.IsBusy);
                 if (!overPalette || currentTool.IsBusy)
                     currentTool.Update(input, drawing);
+                if (menuButtonHovered && input.LeftPressed && !currentTool.IsBusy) openMenu();
             }
 
             transport.Update(gameTime, drawing);
@@ -147,7 +165,7 @@ namespace LineLogisticsGame.Screens
             else if (currentTool is DepotTool depotTool)
                 hint = $" | New: capacity {depotTool.Capacity} (wheel), speed {depotTool.Speed} (Shift+wheel), " +
                        $"interval {DepotTool.FormatInterval(depotTool.Interval)}s (Ctrl+wheel), limit {depotTool.MaxTransporters} (Alt+wheel){hint}";
-            status = $"Points: {transport.Points:N0} | Tool: {currentTool.Name} | Grid: {(drawing.GridEnabled ? "on" : "off")} | Zoom: {camera.Zoom * 100:0}% " +
+            status = $"FPS: {fps:0} | Points: {transport.Points:N0} | Tool: {currentTool.Name} | Grid: {(drawing.GridEnabled ? "on" : "off")} | Zoom: {camera.Zoom * 100:0}% " +
                            $"| Lines: {drawing.Segments.Count} | Resources: {transport.Resources.Count} | Transporters: {transport.Transporters.Count} | Depots: {transport.Depots.Count}{(transport.Paused ? " (paused)" : "")}{hint}";
         }
 
@@ -176,6 +194,15 @@ namespace LineLogisticsGame.Screens
 
         public void Draw(SpriteBatch spriteBatch, SpriteFont font, Input input, Viewport viewport)
         {
+            framesCounted++;
+            double seconds = fpsClock.Elapsed.TotalSeconds;
+            if (seconds >= 0.5)
+            {
+                fps = (float)(framesCounted / seconds);
+                framesCounted = 0;
+                fpsClock.Restart();
+            }
+
             drawing.DrawGrid(camera, viewport.Width, viewport.Height);
 
             // the working area goes through the camera; soft edges stay the same width on screen at any zoom
@@ -184,7 +211,7 @@ namespace LineLogisticsGame.Screens
             DrawShape.Feather = feather * drawing.PixelSize;
             drawing.Draw();
             transport.Draw(drawing);
-            if (currentTool.IsBusy || !palette.Contains(input.ScreenMousePosition))
+            if (currentTool.IsBusy || (!palette.Contains(input.ScreenMousePosition) && !menuButtonHovered))
                 currentTool.Draw(input, drawing);
             DrawShape.View = Matrix.Identity;
             DrawShape.Feather = feather;
@@ -224,6 +251,7 @@ namespace LineLogisticsGame.Screens
             }
 
             float textY = MathF.Round(centerY - font.LineSpacing / 2f);
+            DrawShape.Flush();
             spriteBatch.Begin();
             spriteBatch.DrawString(font, label, new Vector2(box.X + padding, textY), Color.White);
             spriteBatch.DrawString(font, needsLabel, new Vector2(needsX, textY), Color.White * (needs.Count == 0 ? 0.5f : 0.8f));
@@ -238,8 +266,12 @@ namespace LineLogisticsGame.Screens
             int barHeight = font.LineSpacing + padding * 2;
             DrawShape.DrawFilledRectangle(new Rectangle(0, 0, viewport.Width - ToolPalette.Width, barHeight), Color.Black * 0.6f);
 
+            Button.DrawBox(menuButton, menuButtonHovered);
+
+            DrawShape.Flush();
             spriteBatch.Begin();
             spriteBatch.DrawString(font, status, new Vector2(padding + 4, padding), Color.White);
+            Button.DrawLabel(spriteBatch, font, menuButton, "Menu");
             spriteBatch.End();
             return barHeight;
         }
