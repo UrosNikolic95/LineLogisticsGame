@@ -14,7 +14,7 @@ namespace LineLogisticsGame
 {
     // Starts on the splash screen, then the menu. New game opens the recipe screen, where the player picks what each resource
     // is made of; Start opens the game screen. Continue loads the most recent save, Load game lets the player pick one.
-    // While playing, the Menu button (or Esc) opens the in-game menu: Save, Main menu, Quit; Esc or the Menu button closes it.
+    // While playing, the Menu button (or Esc) opens the in-game menu: Back, Save, Main menu, Quit; Back, Esc or the Menu button closes it.
     // A game is saved to its own file when it starts, on F5 or Save, when leaving it for the main menu and when the window closes.
     public class AppGame : Game
     {
@@ -69,6 +69,7 @@ namespace LineLogisticsGame
                 new MenuScreen.Option { Label = "Exit", Choose = Exit });
             loadGameScreen = new LoadGameScreen(LoadGame, OpenMenu);
             gameMenu = new MenuScreen("Menu",
+                new MenuScreen.Option { Label = "Back", Choose = () => gameMenuOpen = false },
                 new MenuScreen.Option { Label = "Save", Choose = () => { Save(true); gameMenuOpen = false; } },
                 new MenuScreen.Option { Label = "Main menu", Choose = LeaveGame },
                 new MenuScreen.Option { Label = "Quit", Choose = Exit });   // OnExiting saves
@@ -86,6 +87,7 @@ namespace LineLogisticsGame
             _graphics.PreferMultiSampling = true;
             _graphics.ApplyChanges();
         }
+
 
         protected override void LoadContent()
         {
@@ -231,7 +233,7 @@ namespace LineLogisticsGame
                 case State.Playing:
                     if (gameMenuOpen)
                     {
-                        // the game is paused behind it; Esc or the Menu button closes it
+                        // the game is paused behind it; Back, Esc or the Menu button closes it
                         gameMenu.Layout(viewport.Width, viewport.Height);
                         if (IsActive)
                         {

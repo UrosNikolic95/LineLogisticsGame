@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Microsoft.Xna.Framework;
 using LineLogisticsGame.Geometry;
 using LineLogisticsGame.World;
 
@@ -39,5 +40,8 @@ namespace LineLogisticsGame.Simulation
 
         public Depot Home;              // depot it belongs to and goes back to when there's no work (null: placed by hand; when idle it joins the nearest depot)
         public bool Returning;          // driving home
+
+        public Vector2 LastPosition;    // where it was at the end of the last update
+        public float StillTime;         // seconds it has not moved (see TransportSystem.RemoveStill)
     }
 }

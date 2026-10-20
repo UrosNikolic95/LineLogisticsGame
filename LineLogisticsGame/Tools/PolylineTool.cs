@@ -7,6 +7,7 @@ using Point = LineLogisticsGame.Geometry.Point;
 namespace LineLogisticsGame.Tools
 {
     // Click to add points one after another. Right click / Enter finishes; clicking the first point closes the shape.
+    // Like the road tool, crossing roads get crossing points and a line crossing a production or consumption line is not built.
     public class PolylineTool : ITool
     {
         public string Name => "Polyline";
@@ -42,12 +43,13 @@ namespace LineLogisticsGame.Tools
                 return;
             }
             if (snap.Position == AnchorPosition) return;
+            if (!drawing.CanBuildRoad(AnchorPosition, snap.Position)) return;
 
             drawing.SaveUndo();
             if (last == null)
                 first = last = drawing.Commit(start);
             Point point = drawing.Commit(snap);
-            drawing.AddSegment(last, point);
+            drawing.AddRoad(last, point);
 
             // Closed the loop, or ran into an existing point/line: the chain is done.
             if (point == first || snap.OnSomething)
@@ -61,7 +63,8 @@ namespace LineLogisticsGame.Tools
             SnapResult snap = SnapCursor(input, drawing);
             if (IsBusy)
             {
-                LineDrawing.DrawStyledLine(AnchorPosition, snap.Position, drawing.CurrentColor * 0.6f, drawing.CurrentWidth);
+                Color preview = drawing.CanBuildRoad(AnchorPosition, snap.Position) ? drawing.CurrentColor : Color.Red;
+                LineDrawing.DrawStyledLine(AnchorPosition, snap.Position, preview * 0.6f, drawing.CurrentWidth);
                 LineDrawing.DrawHandle(first?.position ?? start.Position, Color.CornflowerBlue);
             }
             LineDrawing.DrawSnap(snap);

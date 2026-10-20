@@ -14,6 +14,7 @@ namespace LineLogisticsGame.Tools
     // stand Spacing apart, groups stand twice as far apart, and every group gets its own Group id.
     // The lines are given by a function, so they can change between stations (like the selected resource of a producer).
     // Shift snaps the road's angle; A and B snap to existing points and lines like the road tool. Right click cancels.
+    // If any line would cross or touch an existing line, the station is not built (its lines are previewed red).
     public class StationTool : ITool
     {
         public float Spacing = 20f;
@@ -70,6 +71,7 @@ namespace LineLogisticsGame.Tools
         {
             Line[] lines = group();
             var rows = Layout(lines, start.Position, end.Position, c);
+            if (!CanBuild(drawing, rows)) return;
             drawing.SaveUndo();
             Point a = drawing.Commit(start);
             Point b = drawing.Commit(end);
@@ -95,6 +97,14 @@ namespace LineLogisticsGame.Tools
                 previous = onRoad;
             }
             drawing.AddSegment(previous, b, RoadColor);
+        }
+
+        // Production and consumption lines may not cross or touch any existing line.
+        private static bool CanBuild(LineDrawing drawing, List<(Vector2 Junction, Vector2 Tip, int Line)> rows)
+        {
+            foreach (var (junction, tip, _) in rows)
+                if (drawing.TouchesAnything(junction, tip)) return false;
+            return true;
         }
 
         // Where each line meets the road, where it ends and which line of the group it is. None when C is (almost) on the road.
@@ -132,8 +142,10 @@ namespace LineLogisticsGame.Tools
                 if (end != null)
                 {
                     Line[] lines = group();
-                    foreach (var (junction, tip, line) in Layout(lines, start.Position, end.Position, input.MousePosition))
-                        LineDrawing.DrawStyledLine(junction, tip, lines[line].Color * 0.6f, drawing.CurrentWidth);
+                    var rows = Layout(lines, start.Position, end.Position, input.MousePosition);
+                    bool allowed = CanBuild(drawing, rows);
+                    foreach (var (junction, tip, line) in rows)
+                        LineDrawing.DrawStyledLine(junction, tip, (allowed ? lines[line].Color : Color.Red) * 0.6f, drawing.CurrentWidth);
                     LineDrawing.DrawSnap(end);
                 }
                 LineDrawing.DrawSnap(start);

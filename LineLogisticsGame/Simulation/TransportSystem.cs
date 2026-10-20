@@ -28,8 +28,10 @@ namespace LineLogisticsGame.Simulation
         public float TransporterRadius = 8f;
         public float TransporterGap = 2f;       // how close transporters (and their wagons) may get to each other
         public float StoppedPenalty = 500f;     // extra route cost of a line with a transporter standing on it
+        public float MaxStillTime = 30f;        // seconds a transporter may stand still before it is removed (with whatever it carries)
         public bool Paused = false;
         public long Points;  // earned for every resource a consumer line consumes (see ResourceRecipes.PointsOf)
+        public Action<Vector2, long> PointsEarned;  // where a resource was consumed and the points it earned
 
         public List<Resource> Resources = new List<Resource>();
         public List<Transporter> Transporters = new List<Transporter>();
@@ -162,6 +164,8 @@ namespace LineLogisticsGame.Simulation
             foreach (var resource in Resources.Where(r => r.Path == null)) resource.Position = PositionOn(resource.Segment, resource.Distance);
             foreach (var transporter in Transporters) transporter.position = PositionOn(transporter.Segment, transporter.Distance);
             foreach (var transporter in Transporters) Tow(transporter);
+
+            if (!Paused) RemoveStill((float)gameTime.ElapsedGameTime.TotalSeconds);
         }
 
         #region Green and red lines
@@ -277,7 +281,9 @@ namespace LineLogisticsGame.Simulation
             Resource oldest = OldestOn(segment);
             if (oldest == null) return false;
             RemoveResource(oldest);
-            Points += Recipes.PointsOf(oldest.Type);
+            long points = Recipes.PointsOf(oldest.Type);
+            Points += points;
+            PointsEarned?.Invoke(oldest.Position, points);
             return true;
         }
 
@@ -776,8 +782,10 @@ namespace LineLogisticsGame.Simulation
         }
 
         // Empty: looks for a whole job: resources that need taking somewhere, and a place to take them (see PlanJob).
-        // Factories come first: a job delivering to an input line. Only when there is none it takes resources to a consumer line,
-        // preferring types no input line takes over the ones factories need.
+        // Which green line it picks up from goes by the type of resource, in this order:
+        //   1. types no factory takes (no input line of that type): to a consumer line
+        //   2. types a factory takes: to an input line with room for them
+        //   3. types a factory takes, but no input line of that type has room: to a consumer line
         // Carrying: takes its load to an input line, or when none has room for it, to a consumer line (see PlanDrop).
         private void Plan(Transporter t, LineDrawing drawing)
         {
@@ -788,9 +796,11 @@ namespace LineLogisticsGame.Simulation
             if (!t.Carrying)
             {
                 var needed = drawing.Segments.Where(ToFactory).Select(s => s.Type).ToHashSet();
-                if (!PlanJob(t, drawing, search, ToFactory, _ => true)
-                    && !PlanJob(t, drawing, search, ToConsumer, type => !needed.Contains(type)))
-                    PlanJob(t, drawing, search, ToConsumer, needed.Contains);
+                // types some input line still has unscheduled empty spaces for
+                var factoryHasRoom = SinkLines.Where(s => ToFactory(s.Key) && s.Value.UnscheduledCount > 0).Select(s => s.Key.Type).ToHashSet();
+                if (!PlanJob(t, drawing, search, ToConsumer, type => !needed.Contains(type))
+                    && !PlanJob(t, drawing, search, ToFactory, _ => true))
+                    PlanJob(t, drawing, search, ToConsumer, type => needed.Contains(type) && !factoryHasRoom.Contains(type));
             }
             else if (!PlanDrop(t, search, ToFactory))
                 PlanDrop(t, search, ToConsumer);
@@ -800,9 +810,11 @@ namespace LineLogisticsGame.Simulation
         // the given red lines taking their type with enough unscheduled empty spaces for them (or all it has, when it can never
         // hold that many). It picks the job with the shortest drive there and on to the red line, and reserves both:
         // the green line's last resources and the red line's empty spaces. Returns whether it found one.
+        // Consumer lines go by Fullness first: the least full one wins, and the drive only decides between equally full ones.
         private bool PlanJob(Transporter t, LineDrawing drawing, SearchResult search, Func<StyledSegment, bool> sinks, Func<int, bool> types)
         {
-            (float Cost, List<Leg> Legs) best = (float.MaxValue, null);
+            (int Fill, float Cost, List<Leg> Legs) best = (int.MaxValue, float.MaxValue, null);
+            bool Better(int fill, float cost) => fill < best.Fill || (fill == best.Fill && cost < best.Cost);
             (StyledSegment Pickup, SourceLine Line, int Need, StyledSegment Drop, SinkLine DropLine)? job = null;
             foreach (var (segment, line) in SourceLines)
             {
@@ -817,16 +829,18 @@ namespace LineLogisticsGame.Simulation
                 if (drops.Count == 0) continue;
 
                 var pickup = RouteToEntrance(search, t.Distance, segment, segment.B);
-                if (pickup.Legs == null || pickup.Cost >= best.Cost) continue;
+                if (pickup.Legs == null || !Better(drops.Min(d => Fullness(d.Key, d.Value)), pickup.Cost)) continue;
 
                 // on from where it will stand loading
                 Leg stop = pickup.Legs[^1];
                 var fromPickup = Search(drawing, t, stop.Segment, stop.To);
                 foreach (var (sink, dropLine) in drops)
                 {
+                    int fill = Fullness(sink, dropLine);
+                    if (!Better(fill, pickup.Cost)) continue;
                     var delivery = RouteToEntrance(fromPickup, stop.To, sink, sink.A, sink.B);
-                    if (delivery.Legs == null || pickup.Cost + delivery.Cost >= best.Cost) continue;
-                    best = (pickup.Cost + delivery.Cost, pickup.Legs);
+                    if (delivery.Legs == null || !Better(fill, pickup.Cost + delivery.Cost)) continue;
+                    best = (fill, pickup.Cost + delivery.Cost, pickup.Legs);
                     job = (segment, line, need, sink, dropLine);
                 }
             }
@@ -844,19 +858,21 @@ namespace LineLogisticsGame.Simulation
         }
 
         // Schedules on the nearest of the given red lines taking its type with enough unscheduled empty spaces for its whole load
-        // (see DropNeeded), reserving them. Returns whether it found one.
+        // (see DropNeeded), reserving them. Consumer lines go by Fullness first, like in PlanJob. Returns whether it found one.
         private bool PlanDrop(Transporter t, SearchResult search, Func<StyledSegment, bool> sinks)
         {
-            (float Cost, List<Leg> Legs) best = (float.MaxValue, null);
+            (int Fill, float Cost, List<Leg> Legs) best = (int.MaxValue, float.MaxValue, null);
             SinkLine dropLine = null;
             foreach (var (segment, line) in SinkLines)
             {
                 if (!sinks(segment) || !Accepts(segment, t.CargoType) || line.UnscheduledCount < DropNeeded(t, segment)) continue;
+                int fill = Fullness(segment, line);
+                if (fill > best.Fill) continue;
 
                 var route = RouteToEntrance(search, t.Distance, segment, segment.A, segment.B);
-                if (route.Legs != null && route.Cost < best.Cost)
+                if (route.Legs != null && (fill < best.Fill || route.Cost < best.Cost))
                 {
-                    best = route;
+                    best = (fill, route.Cost, route.Legs);
                     t.DropSegment = segment;
                     dropLine = line;
                 }
@@ -869,6 +885,11 @@ namespace LineLogisticsGame.Simulation
             t.Stop = best.Legs[^1].Segment;
             return true;
         }
+
+        // How full a consumer line is or will be: the resources on it plus the spaces scheduled for deliveries.
+        // 0 for other red lines, so the nearest of them is picked.
+        private int Fullness(StyledSegment segment, SinkLine line) =>
+            segment.Kind == LineKind.Consumer ? OnLine(segment).Count + line.ReservedCount : 0;
 
         // Every line has a list of the transporters on it, front first (farthest along the way they drive).
         // They move in that order, so each one sees where the one in front of it has got to this frame.
@@ -1124,6 +1145,24 @@ namespace LineLogisticsGame.Simulation
                 {
                     t.Trail.RemoveRange(0, i);
                     break;
+                }
+            }
+        }
+
+        // A transporter that hasn't moved for MaxStillTime seconds (stuck, or waiting with nothing to do) is removed,
+        // together with what it carries. Any movement, also of the line it stands on, starts the count again.
+        private void RemoveStill(float dt)
+        {
+            foreach (var t in Transporters.ToList())
+            {
+                if (Vector2.DistanceSquared(t.position, t.LastPosition) > 0.0001f)
+                {
+                    t.LastPosition = t.position;
+                    t.StillTime = 0;
+                }
+                else if ((t.StillTime += dt) >= MaxStillTime)
+                {
+                    RemoveTransporter(t);
                 }
             }
         }

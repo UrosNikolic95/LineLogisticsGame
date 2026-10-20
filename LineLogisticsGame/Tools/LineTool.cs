@@ -8,6 +8,7 @@ namespace LineLogisticsGame.Tools
 {
     // Press, drag, release to draw a single line (a road) in the tool's color.
     // Shift snaps the angle. Starting or ending on an existing line splits that line at the snapped point.
+    // Crossing another road puts a crossing point there; a road crossing a production or consumption line is not built (previewed red).
     public class LineTool : ITool
     {
         public string Name { get; }
@@ -41,10 +42,10 @@ namespace LineLogisticsGame.Tools
             else if (start != null && input.LeftReleased)
             {
                 SnapResult end = SnapCursor(input, drawing);
-                if (Vector2.Distance(start.Position, end.Position) > 2f)
+                if (Vector2.Distance(start.Position, end.Position) > 2f && drawing.CanBuildRoad(start.Position, end.Position))
                 {
                     drawing.SaveUndo();
-                    drawing.AddSegment(drawing.Commit(start), drawing.Commit(end), color);
+                    drawing.AddRoad(drawing.Commit(start), drawing.Commit(end), color);
                 }
                 Cancel();
             }
@@ -55,7 +56,8 @@ namespace LineLogisticsGame.Tools
             SnapResult snap = SnapCursor(input, drawing);
             if (start != null)
             {
-                LineDrawing.DrawStyledLine(start.Position, snap.Position, color * 0.6f, drawing.CurrentWidth);
+                Color preview = drawing.CanBuildRoad(start.Position, snap.Position) ? color : Color.Red;
+                LineDrawing.DrawStyledLine(start.Position, snap.Position, preview * 0.6f, drawing.CurrentWidth);
                 LineDrawing.DrawSnap(start);
             }
             LineDrawing.DrawSnap(snap);

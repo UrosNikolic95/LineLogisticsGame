@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Microsoft.Xna.Framework;
@@ -48,10 +49,21 @@ namespace LineLogisticsGame.Screens
         private int framesCounted;
         private float fps;
 
+        // "+points" over where a resource was consumed, floating up and fading out
+        private class PointsPopup
+        {
+            public Vector2 Position;    // world
+            public string Text;
+            public float Age;
+        }
+        private readonly List<PointsPopup> popups = new List<PointsPopup>();
+        private const float PopupLife = 1.2f, PopupRise = 40f;  // seconds shown, screen pixels risen over that time
+
         public GameScreen(TransportSystem transport, Action openMenu)
         {
             this.transport = transport;
             this.openMenu = openMenu;
+            transport.PointsEarned = (position, points) => popups.Add(new PointsPopup { Position = position, Text = $"+{points:N0}" });
 
             var transporterTool = new TransporterTool(transport);
             var depotTool = new DepotTool(transport);
@@ -159,13 +171,17 @@ namespace LineLogisticsGame.Screens
 
             transport.Update(gameTime, drawing);
 
+            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            foreach (var popup in popups) popup.Age += dt;
+            popups.RemoveAll(p => p.Age >= PopupLife);
+
             string hint = palette.HoveredName != null ? $"  >> {palette.HoveredName}" : "";
             if (currentTool is TransporterTool transporterTool)
                 hint = $" | New: capacity {transporterTool.Capacity} (wheel), speed {transporterTool.Speed} (Shift+wheel){hint}";
             else if (currentTool is DepotTool depotTool)
                 hint = $" | New: capacity {depotTool.Capacity} (wheel), speed {depotTool.Speed} (Shift+wheel), " +
                        $"interval {DepotTool.FormatInterval(depotTool.Interval)}s (Ctrl+wheel), limit {depotTool.MaxTransporters} (Alt+wheel){hint}";
-            status = $"FPS: {fps:0} | Points: {transport.Points:N0} | Tool: {currentTool.Name} | Grid: {(drawing.GridEnabled ? "on" : "off")} | Zoom: {camera.Zoom * 100:0}% " +
+            status = $"FPS: {fps:0} | Tool: {currentTool.Name} | Grid: {(drawing.GridEnabled ? "on" : "off")} | Zoom: {camera.Zoom * 100:0}% " +
                            $"| Lines: {drawing.Segments.Count} | Resources: {transport.Resources.Count} | Transporters: {transport.Transporters.Count} | Depots: {transport.Depots.Count}{(transport.Paused ? " (paused)" : "")}{hint}";
         }
 
@@ -215,10 +231,46 @@ namespace LineLogisticsGame.Screens
                 currentTool.Draw(input, drawing);
             DrawShape.View = Matrix.Identity;
             DrawShape.Feather = feather;
+            DrawPopups(spriteBatch, font);
 
             palette.Draw();
             int statusHeight = DrawStatus(spriteBatch, font, viewport);
-            DrawRequirements(spriteBatch, font, statusHeight + 8);
+            int pointsBottom = DrawPoints(spriteBatch, font, statusHeight + 8);
+            DrawRequirements(spriteBatch, font, pointsBottom + 8);
+        }
+
+        private void DrawPopups(SpriteBatch spriteBatch, SpriteFont font)
+        {
+            if (popups.Count == 0) return;
+            DrawShape.Flush();
+            spriteBatch.Begin();
+            foreach (var popup in popups)
+            {
+                float progress = popup.Age / PopupLife;
+                Vector2 size = font.MeasureString(popup.Text);
+                Vector2 position = camera.WorldToScreen(popup.Position) - new Vector2(size.X / 2f, size.Y + PopupRise * progress);
+                position = new Vector2(MathF.Round(position.X), MathF.Round(position.Y));
+                float alpha = 1f - progress;
+                spriteBatch.DrawString(font, popup.Text, position + Vector2.One, Color.Black * alpha);
+                spriteBatch.DrawString(font, popup.Text, position, Color.Gold * alpha);
+            }
+            spriteBatch.End();
+        }
+
+        // "Points: N" on a dark box under the status line; returns the box's bottom
+        private int DrawPoints(SpriteBatch spriteBatch, SpriteFont font, int top)
+        {
+            const int padding = 6;
+            string text = $"Points: {transport.Points:N0}";
+            Vector2 size = font.MeasureString(text);
+            var box = new Rectangle(8, top, (int)size.X + padding * 2, font.LineSpacing + padding * 2);
+            DrawShape.DrawFilledRectangle(box, Color.Black * 0.6f);
+
+            DrawShape.Flush();
+            spriteBatch.Begin();
+            spriteBatch.DrawString(font, text, new Vector2(box.X + padding, box.Y + padding), Color.Gold);
+            spriteBatch.End();
+            return box.Bottom;
         }
 
         // "Resource (icon)  needs (icon) (icon)" on a dark box under the status line, for the resource selected on the palette

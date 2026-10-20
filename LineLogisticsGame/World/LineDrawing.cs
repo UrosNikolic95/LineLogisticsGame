@@ -170,6 +170,104 @@ namespace LineLogisticsGame.World
             return segment;
         }
 
+        #region Roads
+
+        // How close (in world units) two lines must come to count as touching.
+        private const float Touch = 1f;
+
+        // Roads may cross roads (AddRoad puts a crossing point there) but not production or consumption lines:
+        // a road may touch one only where an end of the road meets an end of the line (like a road starting where a line meets its station's road).
+        public bool CanBuildRoad(Vector2 a, Vector2 b)
+        {
+            foreach (var segment in Segments)
+            {
+                if (segment.Kind == LineKind.Road) continue;
+                Vector2 c = segment.A.position, d = segment.B.position;
+                if (Overlap(a, b, c, d)) return false;
+                if (!Intersect(a, b, c, d, out _, out Vector2 p)) continue;
+                bool atLineEnd = Near(p, c) || Near(p, d);
+                bool atRoadEnd = Near(p, a) || Near(p, b);
+                if (!atLineEnd || !atRoadEnd) return false;
+            }
+            return true;
+        }
+
+        // Whether a line from a to b would cross or touch any existing line (production and consumption lines may not).
+        public bool TouchesAnything(Vector2 a, Vector2 b)
+        {
+            foreach (var segment in Segments)
+            {
+                Vector2 c = segment.A.position, d = segment.B.position;
+                if (Overlap(a, b, c, d) || Intersect(a, b, c, d, out _, out _)) return true;
+            }
+            return false;
+        }
+
+        // Adds a road from a to b (check CanBuildRoad first), with a crossing point wherever it crosses another road:
+        // the crossed road is split there, or its end point is used when it is crossed at an end.
+        public void AddRoad(Point a, Point b, Color? color = null)
+        {
+            var crossings = new List<(float T, StyledSegment Segment, Vector2 Position)>();
+            foreach (var segment in Segments)
+            {
+                if (segment.Kind != LineKind.Road) continue;
+                if (segment.A == a || segment.B == a || segment.A == b || segment.B == b) continue;
+                if (!Intersect(a.position, b.position, segment.A.position, segment.B.position, out float t, out Vector2 p)) continue;
+                if (Near(p, a.position) || Near(p, b.position)) continue;
+                crossings.Add((t, segment, p));
+            }
+
+            Point previous = a;
+            foreach (var (_, segment, position) in crossings.OrderBy(c => c.T))
+            {
+                Point point = Near(position, segment.A.position) ? segment.A
+                    : Near(position, segment.B.position) ? segment.B
+                    : SplitSegment(segment, position);
+                if (point == previous) continue;    // two roads meeting at the same point
+                AddSegment(previous, point, color);
+                previous = point;
+            }
+            AddSegment(previous, b, color);
+        }
+
+        private static bool Near(Vector2 a, Vector2 b) => Vector2.Distance(a, b) <= Touch;
+
+        private static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
+
+        // Where segments a1-a2 and b1-b2 cross (touching ends count); t is how far along a1-a2 (0 to 1). Parallel segments never cross.
+        private static bool Intersect(Vector2 a1, Vector2 a2, Vector2 b1, Vector2 b2, out float t, out Vector2 p)
+        {
+            t = 0;
+            p = Vector2.Zero;
+            Vector2 r = a2 - a1, s = b2 - b1, q = b1 - a1;
+            float lengthR = r.Length(), lengthS = s.Length();
+            if (lengthR == 0 || lengthS == 0) return false;
+            float denominator = Cross(r, s);
+            if (MathF.Abs(denominator) < 1e-6f * lengthR * lengthS) return false;
+
+            t = Cross(q, s) / denominator;
+            float u = Cross(q, r) / denominator;
+            float slackT = Touch / lengthR, slackU = Touch / lengthS;
+            if (t < -slackT || t > 1 + slackT || u < -slackU || u > 1 + slackU) return false;
+            t = MathHelper.Clamp(t, 0f, 1f);
+            p = a1 + r * t;
+            return true;
+        }
+
+        // Whether the segments lie along one line and share more than a touch of it.
+        private static bool Overlap(Vector2 a1, Vector2 a2, Vector2 b1, Vector2 b2)
+        {
+            float length = Vector2.Distance(a1, a2);
+            if (length == 0) return false;
+            Vector2 direction = (a2 - a1) / length;
+            if (MathF.Abs(Cross(direction, b1 - a1)) > Touch || MathF.Abs(Cross(direction, b2 - a1)) > Touch) return false;
+            float t1 = Vector2.Dot(b1 - a1, direction), t2 = Vector2.Dot(b2 - a1, direction);
+            float from = MathF.Max(0, MathF.Min(t1, t2)), to = MathF.Min(length, MathF.Max(t1, t2));
+            return to - from > Touch;
+        }
+
+        #endregion
+
         // A Group id no line has had yet.
         public int NewGroup() => ++lastGroup;
 
