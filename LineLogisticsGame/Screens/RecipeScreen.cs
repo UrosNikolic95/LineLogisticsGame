@@ -84,7 +84,7 @@ namespace LineLogisticsGame.Screens
         {
             var texts = new List<(string Text, Vector2 Position, Color Color)>();
             void Text(string text, Vector2 center, Color color) =>
-                texts.Add((text, center - font.MeasureString(text) / 2f, color));
+                texts.Add((text, TextLayout.Centered(font, text, center), color));
 
             Text("Resource requirements", new Vector2((randomizeButton.Left + startButton.Right) / 2f, table.Y - Cell - 70), Color.White);
             Text("Check the resources (columns) each resource (row) is made of. Unchecked rows are produced from nothing.",
@@ -168,7 +168,7 @@ namespace LineLogisticsGame.Screens
             DrawShape.DrawFilledCircle(center, 13f, 1.5f, color, Color.Black);
             string text = type.ToString();
             bool dark = color.R * 0.299f + color.G * 0.587f + color.B * 0.114f < 120f;
-            texts.Add((text, center - font.MeasureString(text) / 2f, dark ? Color.White : Color.Black));
+            texts.Add((text, TextLayout.Centered(font, text, center), dark ? Color.White : Color.Black));
         }
     }
 }

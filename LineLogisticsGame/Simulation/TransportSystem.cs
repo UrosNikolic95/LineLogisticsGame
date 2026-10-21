@@ -29,9 +29,10 @@ namespace LineLogisticsGame.Simulation
         public float TransporterGap = 2f;       // how close transporters (and their wagons) may get to each other
         public float StoppedPenalty = 500f;     // extra route cost of a line with a transporter standing on it
         public float MaxStillTime = 30f;        // seconds a transporter may stand still before it is removed (with whatever it carries)
+        public long StillPenalty = 100;         // points lost when a transporter is removed for standing still
         public bool Paused = false;
-        public long Points;  // earned for every resource a consumer line consumes (see ResourceRecipes.PointsOf)
-        public Action<Vector2, long> PointsEarned;  // where a resource was consumed and the points it earned
+        public long Points;  // earned for every resource a consumer line consumes (see ResourceRecipes.PointsOf), lost for removed transporters (StillPenalty); can go below zero
+        public Action<Vector2, long> PointsEarned;  // where points were earned (a resource consumed) or lost (negative: a transporter removed) and how many
         public Statistics Statistics = new Statistics();    // what was produced, consumed and earned over time
 
         public List<Resource> Resources = new List<Resource>();
@@ -88,6 +89,28 @@ namespace LineLogisticsGame.Simulation
             transporter.position = PositionOn(segment, transporter.Distance);
             Transporters.Add(transporter);
             return transporter;
+        }
+
+        // For saving and loading (see SaveGame): how far the produce / consume timer of a line has run,
+        // and where a transporter is in the queue of the green and red lines it is scheduled on (-1: not scheduled there).
+        public float TimerOf(StyledSegment segment) => timers.TryGetValue(segment, out float time) ? time : 0f;
+        public void SetTimer(StyledSegment segment, float time) => timers[segment] = time;
+        public int PickupOrderOf(Transporter t) =>
+            t.PickupSegment != null && SourceLines.TryGetValue(t.PickupSegment, out var line) ? line.Scheduled.IndexOf(t) : -1;
+        public int DropOrderOf(Transporter t) =>
+            t.DropSegment != null && SinkLines.TryGetValue(t.DropSegment, out var line) ? line.Scheduled.IndexOf(t) : -1;
+
+        // Puts a loaded transporter back in the queues of the lines its plan is on; call in the saved queue order.
+        public void ScheduleOnPickup(Transporter t)
+        {
+            if (!SourceLines.TryGetValue(t.PickupSegment, out var line)) SourceLines[t.PickupSegment] = line = new SourceLine();
+            line.Scheduled.Add(t);
+        }
+
+        public void ScheduleOnDrop(Transporter t)
+        {
+            if (!SinkLines.TryGetValue(t.DropSegment, out var line)) SinkLines[t.DropSegment] = line = new SinkLine();
+            line.Scheduled.Add(t);
         }
 
         public void RemoveTransporter(Transporter transporter)
@@ -1160,7 +1183,7 @@ namespace LineLogisticsGame.Simulation
         }
 
         // A transporter that hasn't moved for MaxStillTime seconds (stuck, or waiting with nothing to do) is removed,
-        // together with what it carries. Any movement, also of the line it stands on, starts the count again.
+        // together with what it carries, and costs StillPenalty points. Any movement, also of the line it stands on, starts the count again.
         private void RemoveStill(float dt)
         {
             foreach (var t in Transporters.ToList())
@@ -1173,6 +1196,8 @@ namespace LineLogisticsGame.Simulation
                 else if ((t.StillTime += dt) >= MaxStillTime)
                 {
                     RemoveTransporter(t);
+                    Points -= StillPenalty;
+                    PointsEarned?.Invoke(t.position, -StillPenalty);
                 }
             }
         }

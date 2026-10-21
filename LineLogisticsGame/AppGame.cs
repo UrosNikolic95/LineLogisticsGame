@@ -305,7 +305,7 @@ namespace LineLogisticsGame
                 DrawShape.DrawFilledRectangle(box, Color.Black * 0.7f);
                 DrawShape.Flush();
                 _spriteBatch.Begin();
-                _spriteBatch.DrawString(font, message, new Vector2(box.X + 12, box.Y + 6), Color.White * Math.Min(1f, messageTime * 2f));
+                _spriteBatch.DrawString(font, message, TextLayout.Centered(font, message, box.Center.ToVector2()), Color.White * Math.Min(1f, messageTime * 2f));
                 _spriteBatch.End();
             }
 

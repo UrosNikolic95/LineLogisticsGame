@@ -97,7 +97,7 @@ namespace LineLogisticsGame.Screens
                 Rectangle row = RowBounds(i);
                 Button.DrawBox(row, i == selected);
                 SaveGame save = saves[i].Save;
-                float y = row.Center.Y - font.LineSpacing / 2f;
+                float y = TextLayout.CenteredY(font, row.Center.Y);
                 texts.Add((save.SavedAt.ToString("yyyy-MM-dd  HH:mm:ss"), new Vector2(row.X + 14, y), Color.White));
                 string points = $"{save.Points:N0} pts";
                 texts.Add((points, new Vector2(row.Right - 14 - font.MeasureString(points).X, y), Color.Gold));

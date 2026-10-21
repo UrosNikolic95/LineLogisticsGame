@@ -18,6 +18,7 @@ namespace LineLogisticsGame.Screens
     //   Transported: resources transporters delivered, per type, the same way
     //   Trips: deliveries transporters finished, the same way
     //   Points: the points total over time
+    // The charts show the last Statistics.MaxSamples samples; totals count everything since the game started.
     // Click a tab or press 1-6 (Left/Right steps through them). Close, Esc or the Stats button closes it.
     public class StatsScreen
     {
@@ -100,9 +101,9 @@ namespace LineLogisticsGame.Screens
             switch (tab)
             {
                 case Tab.Lines: DrawLines(); break;
-                case Tab.Produced: DrawResourceChart("Resources produced", s => s.Produced, statistics.TotalProduced); break;
-                case Tab.Consumed: DrawResourceChart("Resources consumed by producers and consumers", s => s.Consumed, statistics.TotalConsumed); break;
-                case Tab.Transported: DrawResourceChart("Resources transported", s => s.Transported, statistics.TotalTransported); break;
+                case Tab.Produced: DrawResourceChart("Resources produced", s => s.Produced); break;
+                case Tab.Consumed: DrawResourceChart("Resources consumed by producers and consumers", s => s.Consumed); break;
+                case Tab.Transported: DrawResourceChart("Resources transported", s => s.Transported); break;
                 case Tab.Trips: DrawTrips(); break;
                 case Tab.Points: DrawPoints(); break;
             }
@@ -115,14 +116,14 @@ namespace LineLogisticsGame.Screens
         }
 
         private void Text(string text, Vector2 position, Color color) => texts.Add((text, position, color));
-        private void TextCentered(string text, Vector2 center, Color color) => texts.Add((text, center - font.MeasureString(text) / 2f, color));
+        private void TextCentered(string text, Vector2 center, Color color) => texts.Add((text, TextLayout.Centered(font, text, center), color));
         private void TextRight(string text, Vector2 rightCenter, Color color)
         {
             Vector2 size = font.MeasureString(text);
-            texts.Add((text, rightCenter - new Vector2(size.X, size.Y / 2f), color));
+            texts.Add((text, new Vector2(rightCenter.X - size.X, TextLayout.CenteredY(font, rightCenter.Y)), color));
         }
         private void TextLeft(string text, Vector2 leftCenter, Color color) =>
-            texts.Add((text, leftCenter - new Vector2(0, font.MeasureString(text).Y / 2f), color));
+            texts.Add((text, new Vector2(leftCenter.X, TextLayout.CenteredY(font, leftCenter.Y)), color));
 
         #region Lines
 
@@ -192,11 +193,13 @@ namespace LineLogisticsGame.Screens
 
         #region Charts
 
-        // a line per resource type that has any, of how many there were in every sample, with totals in a legend
-        private void DrawResourceChart(string title, Func<Statistics.Sample, int[]> counts, Func<int, int> total)
+        // A line per resource type that has any, of how many there were in every kept sample,
+        // with totals since the game started in a legend.
+        private void DrawResourceChart(string title, Func<Statistics.Sample, int[]> counts)
         {
             var statistics = transport.Statistics;
-            var types = Enumerable.Range(1, ResourceRecipes.Count).Where(type => total(type) > 0).ToList();
+            int[] totals = counts(statistics.Totals);
+            var types = Enumerable.Range(1, ResourceRecipes.Count).Where(type => totals[type] > 0).ToList();
             Rectangle chart = ChartArea(title, $"per {Statistics.SampleInterval:0} s", true);
 
             // legend: icon and total for every type
@@ -205,25 +208,24 @@ namespace LineLogisticsGame.Screens
             foreach (int type in types)
             {
                 TransportSystem.DrawResourceIcon(new Vector2(chart.Right + 40, legendY + 10), 9f, type);
-                TextLeft(total(type).ToString("N0"), new Vector2(chart.Right + 58, legendY + 10), ResourceRecipes.ColorOf(type));
+                TextLeft(totals[type].ToString("N0"), new Vector2(chart.Right + 58, legendY + 10), ResourceRecipes.ColorOf(type));
                 legendY += 26;
             }
 
             if (statistics.Samples.Count == 0)
             {
-                DrawAxes(chart, 0, 1, 1);
+                DrawAxes(chart, 0, 1, 0, 1);
                 TextCentered($"Collecting data, the first sample comes after {Statistics.SampleInterval:0} s of play",
                     chart.Center.ToVector2(), TextColor * 0.5f);
                 return;
             }
 
             long max = Math.Max(1, statistics.Samples.Max(s => types.Select(type => counts(s)[type]).DefaultIfEmpty(0).Max()));
-            float duration = statistics.Samples.Count * Statistics.SampleInterval;
-            long top = DrawAxes(chart, 0, max, duration);
+            long top = DrawAxes(chart, 0, max, statistics.StartTime, statistics.EndTime);
             foreach (int type in types)
             {
-                var points = statistics.Samples.Select((s, i) => ((i + 1) * Statistics.SampleInterval, (float)counts(s)[type])).ToList();
-                DrawSeries(chart, points, 0, top, duration, ResourceRecipes.ColorOf(type));
+                var points = statistics.Samples.Select((s, i) => (statistics.SampleEnd(i), (float)counts(s)[type])).ToList();
+                DrawSeries(chart, points, 0, top, statistics.StartTime, statistics.EndTime, ResourceRecipes.ColorOf(type));
             }
         }
 
@@ -232,23 +234,22 @@ namespace LineLogisticsGame.Screens
         {
             var statistics = transport.Statistics;
             Rectangle chart = ChartArea("Trips taken", $"per {Statistics.SampleInterval:0} s", false);
-            TextRight($"Total {statistics.TotalTrips:N0} trips", new Vector2(chart.Right, chart.Y - 22), transport.TransporterColor);
+            TextRight($"Total {statistics.Totals.Trips:N0} trips", new Vector2(chart.Right, chart.Y - 22), transport.TransporterColor);
 
             if (statistics.Samples.Count == 0)
             {
-                DrawAxes(chart, 0, 1, 1);
+                DrawAxes(chart, 0, 1, 0, 1);
                 TextCentered($"Collecting data, the first sample comes after {Statistics.SampleInterval:0} s of play",
                     chart.Center.ToVector2(), TextColor * 0.5f);
                 return;
             }
 
-            float duration = statistics.Samples.Count * Statistics.SampleInterval;
-            long top = DrawAxes(chart, 0, Math.Max(1, statistics.Samples.Max(s => s.Trips)), duration);
-            var points = statistics.Samples.Select((s, i) => ((i + 1) * Statistics.SampleInterval, (float)s.Trips)).ToList();
-            DrawSeries(chart, points, 0, top, duration, transport.TransporterColor);
+            long top = DrawAxes(chart, 0, Math.Max(1, statistics.Samples.Max(s => s.Trips)), statistics.StartTime, statistics.EndTime);
+            var points = statistics.Samples.Select((s, i) => (statistics.SampleEnd(i), (float)s.Trips)).ToList();
+            DrawSeries(chart, points, 0, top, statistics.StartTime, statistics.EndTime, transport.TransporterColor);
         }
 
-        // the points total from when recording started until now
+        // the points total over the kept samples
         private void DrawPoints()
         {
             var statistics = transport.Statistics;
@@ -257,25 +258,26 @@ namespace LineLogisticsGame.Screens
             if (statistics.Samples.Count == 0)
             {
                 TextRight($"Total {statistics.StartPoints:N0}", new Vector2(chart.Right, chart.Y - 22), Color.Gold);
-                DrawAxes(chart, 0, 1, 1);
+                DrawAxes(chart, 0, 1, 0, 1);
                 TextCentered($"Collecting data, the first sample comes after {Statistics.SampleInterval:0} s of play",
                     chart.Center.ToVector2(), TextColor * 0.5f);
                 return;
             }
 
             // like the other charts, only finished samples: it changes once every sample, not every frame
-            var points = new List<(float Time, float Value)> { (0f, statistics.StartPoints) };
-            points.AddRange(statistics.Samples.Select((s, i) => ((i + 1) * Statistics.SampleInterval, (float)s.Points)));
-            float duration = statistics.Samples.Count * Statistics.SampleInterval;
+            var points = new List<(float Time, float Value)> { (statistics.StartTime, statistics.StartPoints) };
+            points.AddRange(statistics.Samples.Select((s, i) => (statistics.SampleEnd(i), (float)s.Points)));
+            float duration = statistics.EndTime - statistics.StartTime;
 
             long total = statistics.Samples[^1].Points, earned = total - statistics.StartPoints;
             TextRight($"Total {total:N0}   |   earned {earned:N0} in {FormatTime(duration)}   |   {earned / duration * 60f:N0} per minute",
                 new Vector2(chart.Right, chart.Y - 22), Color.Gold);
 
             long min = points.Min(p => (long)p.Value), max = points.Max(p => (long)p.Value);
-            long bottom = min > 0 && min * 2 > max ? NiceFloor(min) : 0;    // zoom in when the total doesn't change much
-            long top = DrawAxes(chart, bottom, Math.Max(max, bottom + 1), duration);
-            DrawSeries(chart, points, bottom, top, duration, Color.Gold);
+            // zoom in when the total doesn't change much; go below zero when penalties took it there
+            long bottom = min > 0 && min * 2 > max ? NiceFloor(min) : min < 0 ? -NiceCeiling(-min) : 0;
+            long top = DrawAxes(chart, bottom, Math.Max(max, bottom + 1), statistics.StartTime, statistics.EndTime);
+            DrawSeries(chart, points, bottom, top, statistics.StartTime, statistics.EndTime, Color.Gold);
         }
 
         // the plot area under a title, leaving room for the value labels on the left and, when asked, a legend on the right
@@ -288,9 +290,11 @@ namespace LineLogisticsGame.Screens
             return new Rectangle(left, top, right - left, content.Bottom - 30 - top);
         }
 
-        // Grid lines with values on the left and times along the bottom; returns the value at the top of the chart.
-        private long DrawAxes(Rectangle chart, long bottom, long max, float duration)
+        // Grid lines with values on the left and times (since the game started) along the bottom, from start to end;
+        // returns the value at the top of the chart.
+        private long DrawAxes(Rectangle chart, long bottom, long max, float start, float end)
         {
+            float duration = end - start;
             const int steps = 4;
             long step = NiceCeiling(Math.Max(1, (max - bottom + steps - 1) / steps));
             long top = bottom + step * steps;
@@ -305,19 +309,19 @@ namespace LineLogisticsGame.Screens
             // a time label every "nice" interval, about every 120 pixels
             float[] intervals = { 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200 };
             float every = intervals.FirstOrDefault(s => chart.Width * s / duration >= 120f, intervals[^1]);
-            for (float t = 0; t <= duration + 0.01f; t += every)
+            for (float t = MathF.Ceiling(start / every - 0.001f) * every; t <= end + 0.01f; t += every)
             {
-                float x = chart.Left + chart.Width * t / duration;
+                float x = chart.Left + chart.Width * (t - start) / duration;
                 DrawShape.DrawLine(new Vector2(x, chart.Bottom), new Vector2(x, chart.Bottom + 5), TextColor * 0.5f, 1f);
                 TextCentered(FormatTime(t), new Vector2(x, chart.Bottom + 16), TextColor * 0.6f);
             }
             return top;
         }
 
-        private static void DrawSeries(Rectangle chart, List<(float Time, float Value)> points, long bottom, long top, float duration, Color color)
+        private static void DrawSeries(Rectangle chart, List<(float Time, float Value)> points, long bottom, long top, float start, float end, Color color)
         {
             Vector2 At((float Time, float Value) p) =>
-                new Vector2(chart.Left + chart.Width * p.Time / duration, chart.Bottom - chart.Height * (p.Value - bottom) / (top - bottom));
+                new Vector2(chart.Left + chart.Width * (p.Time - start) / (end - start), chart.Bottom - chart.Height * (p.Value - bottom) / (top - bottom));
 
             for (int i = 1; i < points.Count; i++)
                 DrawShape.DrawLine(At(points[i - 1]), At(points[i]), color, 2f);

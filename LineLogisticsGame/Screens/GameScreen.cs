@@ -62,6 +62,7 @@ namespace LineLogisticsGame.Screens
         {
             public Vector2 Position;    // world
             public string Text;
+            public Color Color;
             public float Age;
         }
         private readonly List<PointsPopup> popups = new List<PointsPopup>();
@@ -72,7 +73,7 @@ namespace LineLogisticsGame.Screens
             this.transport = transport;
             this.openMenu = openMenu;
             this.openStats = openStats;
-            transport.PointsEarned = (position, points) => popups.Add(new PointsPopup { Position = position, Text = $"+{points:N0}" });
+            transport.PointsEarned = (position, points) => popups.Add(new PointsPopup { Position = position, Text = points < 0 ? $"{points:N0}" : $"+{points:N0}", Color = points < 0 ? Color.OrangeRed : Color.Gold });
 
             var transporterTool = new TransporterTool(transport);
             var depotTool = new DepotTool(transport);
@@ -286,7 +287,7 @@ namespace LineLogisticsGame.Screens
                 position = new Vector2(MathF.Round(position.X), MathF.Round(position.Y));
                 float alpha = 1f - progress;
                 spriteBatch.DrawString(font, popup.Text, position + Vector2.One, Color.Black * alpha);
-                spriteBatch.DrawString(font, popup.Text, position, Color.Gold * alpha);
+                spriteBatch.DrawString(font, popup.Text, position, popup.Color * alpha);
             }
             spriteBatch.End();
         }
@@ -302,7 +303,7 @@ namespace LineLogisticsGame.Screens
 
             DrawShape.Flush();
             spriteBatch.Begin();
-            spriteBatch.DrawString(font, text, new Vector2(box.X + padding, box.Y + padding), Color.Gold);
+            spriteBatch.DrawString(font, text, TextLayout.Centered(font, text, box.Center.ToVector2()), Color.Gold);
             spriteBatch.End();
             return box.Bottom;
         }
@@ -336,7 +337,7 @@ namespace LineLogisticsGame.Screens
                 x += iconSize + gap;
             }
 
-            float textY = MathF.Round(centerY - font.LineSpacing / 2f);
+            float textY = TextLayout.CenteredY(font, centerY);
             DrawShape.Flush();
             spriteBatch.Begin();
             spriteBatch.DrawString(font, label, new Vector2(box.X + padding, textY), Color.White);

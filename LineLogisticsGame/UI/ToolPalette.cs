@@ -280,8 +280,7 @@ namespace LineLogisticsGame.UI
             foreach (var button in buttons)
             {
                 if (button.Bounds.IsEmpty || button.Label == null) continue;
-                Vector2 size = font.MeasureString(button.Label);
-                var position = new Vector2(button.Bounds.Center.X - size.X / 2f, button.Bounds.Top - LabelHeight + (LabelHeight - size.Y) / 2f);
+                var position = TextLayout.Centered(font, button.Label, new Vector2(button.Bounds.Center.X, button.Bounds.Top - LabelHeight / 2f));
                 spriteBatch.DrawString(font, button.Label, new Vector2(MathF.Round(position.X), MathF.Round(position.Y)), IconColor * 0.75f);
             }
             spriteBatch.End();

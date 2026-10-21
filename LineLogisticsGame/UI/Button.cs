@@ -20,8 +20,8 @@ namespace LineLogisticsGame.UI
 
         public static void DrawLabel(SpriteBatch spriteBatch, SpriteFont font, Rectangle bounds, string label, bool enabled = true)
         {
-            Vector2 position = bounds.Center.ToVector2() - font.MeasureString(label) / 2f;
-            spriteBatch.DrawString(font, label, new Vector2(System.MathF.Round(position.X), System.MathF.Round(position.Y)), Color.White * (enabled ? 1f : 0.35f));
+            Vector2 position = TextLayout.Centered(font, label, bounds.Center.ToVector2());
+            spriteBatch.DrawString(font, label, position, Color.White * (enabled ? 1f : 0.35f));
         }
     }
 }
