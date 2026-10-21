@@ -1373,11 +1373,6 @@ namespace LineLogisticsGame.Simulation
                 }
             }
 
-            foreach (var (segment, line) in SourceLines)
-                DrawCounter(segment, line.ResourceCount, line.ReservedCount);
-            foreach (var (segment, line) in SinkLines)
-                DrawCounter(segment, line.FreeCount, line.ReservedCount);
-
             // under the transporters coming out of it, with how many of its transporters are out / how many it may have out
             foreach (var depot in Depots)
             {
@@ -1484,17 +1479,6 @@ namespace LineLogisticsGame.Simulation
             Color color = Color.White * 0.35f;
             DrawShape.DrawLine(tip, tip - direction * 5f + normal * 4f, color, 1.5f);
             DrawShape.DrawLine(tip, tip - direction * 5f - normal * 4f, color, 1.5f);
-        }
-
-        // "resources/reserved" on a green line, "empty spaces/reserved" on a red line, next to its middle
-        private void DrawCounter(StyledSegment segment, int count, int reserved)
-        {
-            Vector2 a = segment.A.position, b = segment.B.position;
-            Vector2 normal = a == b ? -Vector2.UnitY : Vector2.Normalize(VectorHelpers.Ortogonal(b - a));
-            if (normal.Y > 0) normal = -normal;     // keep it above the line
-            Vector2 center = VectorHelpers.Midpoint(a, b) + normal * (segment.Width / 2f + 14f);
-
-            DrawLabel(center, (count.ToString(), Color.White), ("/", Color.White * 0.5f), (reserved.ToString(), TransporterColor));
         }
 
         // digits, '/' and '.' on a dark box centered on a point; a space leaves a gap

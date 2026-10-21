@@ -18,6 +18,10 @@ namespace LineLogisticsGame.Tools
 
         void Cancel();
 
+        // True when a right click at the mouse is for the tool itself (cancelling, removing what is under it);
+        // otherwise a right click deselects the tool.
+        bool UsesRightClick(Input input) => IsBusy;
+
         // Icon shown on the tool's palette button.
         void DrawIcon(Rectangle bounds, Color color);
     }

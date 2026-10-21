@@ -271,9 +271,16 @@ namespace LineLogisticsGame.World
         // A Group id no line has had yet.
         public int NewGroup() => ++lastGroup;
 
+        // The lines removed together with this one: its whole group (a producer's inputs and output), or just itself.
+        public IEnumerable<StyledSegment> RemovedWith(StyledSegment segment)
+        {
+            return segment.Group == 0 ? new[] { segment } : Segments.Where(s => s.Group == segment.Group);
+        }
+
         public void RemoveSegment(StyledSegment segment)
         {
-            Segments.Remove(segment);
+            foreach (var removed in RemovedWith(segment).ToList())
+                Segments.Remove(removed);
             RebuildConnections();
             Points.RemoveAll(p => p.connections.Count == 0);
         }
@@ -376,7 +383,8 @@ namespace LineLogisticsGame.World
         public void DrawGrid(Camera camera, int width, int height)
         {
             if (!GridEnabled) return;
-            var color = new Color(255, 255, 255, 9);
+            // premultiplied (AlphaBlend), so a faint white is White * alpha, not white with a low alpha
+            var color = Color.White * 0.06f;
             float step = GridSize;
             while (step * camera.Zoom < 8f) step *= 2f;
 

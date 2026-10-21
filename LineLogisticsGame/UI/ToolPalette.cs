@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using LineLogisticsGame.Geometry;
 using LineLogisticsGame.Simulation;
 using LineLogisticsGame.Tools;
@@ -18,24 +19,31 @@ namespace LineLogisticsGame.UI
             public Action OnClick;          // null: only shows something
             public Func<bool> IsSelected = () => false;
             public Action<Rectangle, Color> DrawIcon;
+            public Func<bool> IsVisible = () => true;
+            public string Label;            // drawn above the button, or null
         }
 
         // One of a set of options (like the resource stations are built for), shown as a small square button.
+        // Shown only while IsVisible (the options of the selected tool).
         public class Choice
         {
             public string Name;
             public Func<bool> IsSelected;
             public Action Select;
             public Action<Rectangle> DrawIcon;
+            public Func<bool> IsVisible = () => true;
         }
 
-        // A value changed with - and + buttons, shown between them.
+        // A value changed with - and + buttons, shown between them under a short label.
+        // Shown only while IsVisible (the settings of the selected tool).
         public class Stepper
         {
             public string Name;
+            public string Label;
             public Func<string> Value;
             public Func<Color> ValueColor;
             public Action<int> Change;
+            public Func<bool> IsVisible = () => true;
         }
 
         public const int Width = 96;
@@ -44,6 +52,7 @@ namespace LineLogisticsGame.UI
         private const int ChoiceGap = 4;
         private const int StepperHeight = 24;
         private const int StepButtonWidth = 16;
+        private const int LabelHeight = 18;
         private const int Padding = 8;
         private const int Gap = 6;
         private const int SectionGap = 14;
@@ -88,7 +97,8 @@ namespace LineLogisticsGame.UI
                     Name = choice.Name,
                     OnClick = choice.Select,
                     IsSelected = choice.IsSelected,
-                    DrawIcon = (bounds, _) => choice.DrawIcon(bounds)
+                    DrawIcon = (bounds, _) => choice.DrawIcon(bounds),
+                    IsVisible = choice.IsVisible
                 });
             }
 
@@ -98,18 +108,22 @@ namespace LineLogisticsGame.UI
                 {
                     Name = $"{stepper.Name} -",
                     OnClick = () => stepper.Change(-1),
-                    DrawIcon = (bounds, color) => DrawPlusMinusIcon(bounds, color, false)
+                    DrawIcon = (bounds, color) => DrawPlusMinusIcon(bounds, color, false),
+                    IsVisible = stepper.IsVisible
                 });
                 buttons.Add(new Button
                 {
                     Name = stepper.Name,
-                    DrawIcon = (bounds, _) => TransportSystem.DrawLabel(bounds.Center.ToVector2(), (stepper.Value(), stepper.ValueColor()))
+                    DrawIcon = (bounds, _) => TransportSystem.DrawLabel(bounds.Center.ToVector2(), (stepper.Value(), stepper.ValueColor())),
+                    IsVisible = stepper.IsVisible,
+                    Label = stepper.Label
                 });
                 buttons.Add(new Button
                 {
                     Name = $"{stepper.Name} +",
                     OnClick = () => stepper.Change(1),
-                    DrawIcon = (bounds, color) => DrawPlusMinusIcon(bounds, color, true)
+                    DrawIcon = (bounds, color) => DrawPlusMinusIcon(bounds, color, true),
+                    IsVisible = stepper.IsVisible
                 });
             }
 
@@ -172,18 +186,29 @@ namespace LineLogisticsGame.UI
                 y += ToolButtonHeight + Gap;
             }
 
+            // the selected tool's options; hidden ones take no space
+            for (int i = index; i < index + choiceCount + stepperCount * 3; i++)
+                buttons[i].Bounds = Rectangle.Empty;
+
             // choices: small, several per row
-            if (choiceCount > 0)
+            var visibleChoices = new List<int>();
+            for (int i = 0; i < choiceCount; i++)
+                if (buttons[index + i].IsVisible()) visibleChoices.Add(index + i);
+            if (visibleChoices.Count > 0)
             {
                 int size = (full - ChoiceGap * (ChoiceColumns - 1)) / ChoiceColumns;
-                y = LayoutGrid(index, choiceCount, left, y + SectionGap - Gap, size, ChoiceColumns, ChoiceGap) + Gap;
-                index += choiceCount;
+                y = LayoutGrid(visibleChoices, left, y + SectionGap - Gap, size, ChoiceColumns, ChoiceGap) + Gap;
             }
+            index += choiceCount;
 
-            // steppers: - value +, one per row
-            if (stepperCount > 0) y += SectionGap - Gap;
+            // steppers: label, then - value +
+            bool anyStepper = false;
             for (int i = 0; i < stepperCount; i++, index += 3)
             {
+                if (!buttons[index].IsVisible()) continue;
+                if (!anyStepper) y += SectionGap - Gap;
+                anyStepper = true;
+                y += LabelHeight;
                 buttons[index].Bounds = new Rectangle(left, y, StepButtonWidth, StepperHeight);
                 buttons[index + 1].Bounds = new Rectangle(left + StepButtonWidth, y, full - StepButtonWidth * 2, StepperHeight);
                 buttons[index + 2].Bounds = new Rectangle(left + full - StepButtonWidth, y, StepButtonWidth, StepperHeight);
@@ -192,18 +217,21 @@ namespace LineLogisticsGame.UI
 
             // actions: two per row
             y += SectionGap - Gap;
-            LayoutGrid(index, buttons.Count - index, left, y, half, 2, Gap);
+            var actions = new List<int>();
+            for (int i = index; i < buttons.Count; i++) actions.Add(i);
+            LayoutGrid(actions, left, y, half, 2, Gap);
         }
 
-        private int LayoutGrid(int start, int count, int left, int y, int size, int columns, int gap)
+        // lays out the buttons at these indices in rows of square cells; returns the bottom of the last row
+        private int LayoutGrid(List<int> indices, int left, int y, int size, int columns, int gap)
         {
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < indices.Count; i++)
             {
                 int column = i % columns;
                 int row = i / columns;
-                buttons[start + i].Bounds = new Rectangle(left + column * (size + gap), y + row * (size + gap), size, size);
+                buttons[indices[i]].Bounds = new Rectangle(left + column * (size + gap), y + row * (size + gap), size, size);
             }
-            int rows = (count + columns - 1) / columns;
+            int rows = (indices.Count + columns - 1) / columns;
             return y + rows * (size + gap) - gap;
         }
 
@@ -215,7 +243,7 @@ namespace LineLogisticsGame.UI
 
             foreach (var button in buttons)
             {
-                if (button.Bounds.Contains(input.ScreenMousePosition))
+                if (!button.Bounds.IsEmpty && button.Bounds.Contains(input.ScreenMousePosition))
                 {
                     hovered = button;
                     break;
@@ -226,13 +254,15 @@ namespace LineLogisticsGame.UI
                 hovered.OnClick?.Invoke();
         }
 
-        public void Draw()
+        public void Draw(SpriteBatch spriteBatch, SpriteFont font)
         {
             DrawShape.DrawFilledRectangle(panel, PanelColor);
             DrawShape.DrawFilledRectangle(new Rectangle(panel.X, panel.Y, 1, panel.Height), BorderColor);
 
             foreach (var button in buttons)
             {
+                if (button.Bounds.IsEmpty) continue;
+
                 if (button.IsSelected())
                     DrawShape.DrawFilledRectangle(button.Bounds, SelectedColor);
                 else if (button == hovered && button.OnClick != null)
@@ -243,6 +273,18 @@ namespace LineLogisticsGame.UI
                 if (button == hovered && button.OnClick != null)
                     DrawShape.DrawRectangle(button.Bounds, 1f, IconColor * 0.6f);
             }
+
+            // labels centered over their buttons (over the whole stepper row, since the value is in its middle)
+            DrawShape.Flush();
+            spriteBatch.Begin();
+            foreach (var button in buttons)
+            {
+                if (button.Bounds.IsEmpty || button.Label == null) continue;
+                Vector2 size = font.MeasureString(button.Label);
+                var position = new Vector2(button.Bounds.Center.X - size.X / 2f, button.Bounds.Top - LabelHeight + (LabelHeight - size.Y) / 2f);
+                spriteBatch.DrawString(font, button.Label, new Vector2(MathF.Round(position.X), MathF.Round(position.Y)), IconColor * 0.75f);
+            }
+            spriteBatch.End();
         }
 
         private static void DrawGridIcon(Rectangle bounds, Color color)

@@ -92,6 +92,9 @@ namespace LineLogisticsGame.Tools
                 transport.AddDepot(segment, input.MousePosition, Capacity, Speed, Interval, MaxTransporters);
         }
 
+        // a right click over a depot removes it
+        public bool UsesRightClick(Input input) => transport.FindDepot(input.MousePosition, 4f) != null;
+
         // depots only go on roads
         private StyledSegment RoadAt(Vector2 position, LineDrawing drawing)
         {

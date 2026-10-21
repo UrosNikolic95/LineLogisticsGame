@@ -5,7 +5,7 @@ using LineLogisticsGame.World;
 
 namespace LineLogisticsGame.Tools
 {
-    // Click or drag over lines to delete them.
+    // Click or drag over lines to delete them. A producer's input or output line takes the whole producer with it.
     public class EraseTool : ITool
     {
         public string Name => "Erase";
@@ -26,7 +26,10 @@ namespace LineLogisticsGame.Tools
         {
             StyledSegment segment = drawing.FindSegment(input.MousePosition, 4f);
             if (segment != null)
-                DrawShape.DrawLine(segment.A.position, segment.B.position, Color.Red * 0.7f, segment.Width + 4f);
+            {
+                foreach (var removed in drawing.RemovedWith(segment))
+                    DrawShape.DrawLine(removed.A.position, removed.B.position, Color.Red * 0.7f, removed.Width + 4f);
+            }
             DrawShape.DrawCircle(input.MousePosition, 4f, 1f, Color.Red);
         }
 

@@ -58,6 +58,9 @@ namespace LineLogisticsGame.Tools
                 transport.AddTransporter(segment, input.MousePosition, Capacity, Speed);
         }
 
+        // a right click over a transporter removes it
+        public bool UsesRightClick(Input input) => transport.FindTransporter(input.MousePosition, 4f) != null;
+
         // transporters only go on roads
         private StyledSegment RoadAt(Vector2 position, LineDrawing drawing)
         {
