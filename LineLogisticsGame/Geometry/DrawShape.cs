@@ -5,20 +5,33 @@ using System.Collections.Generic;
 
 namespace LineLogisticsGame.Geometry
 {
-    // Draws primitives directly on the GPU (no textures).
+    // Draws primitives directly on the GPU.
     // Call Initialize once in LoadContent. Draw calls must be outside SpriteBatch.Begin/End.
     // Shapes are collected into one triangle list and sent to the GPU in a single draw call when Flush is called,
     // when View changes, or when the list gets long. Call Flush before every SpriteBatch.Begin (so text lands on top of
     // the shapes drawn before it) and at the end of the frame.
     // Shapes entirely off screen are skipped.
+    //
+    // Filled circles are not built from triangles every time: Initialize draws one large soft-edged white disc (the prototype)
+    // into a mipmapped render target, and every filled circle is then a single quad showing it, tinted. Everything else is
+    // drawn with the same texture, sampling the solid white middle of the disc, so all shapes stay in one draw call and in order.
+    // Rings, arcs, and circles whose fill or border is see-through (where a border disc would show through the fill)
+    // are still built from triangles.
     public static class DrawShape
     {
         private static GraphicsDevice graphicsDevice;
         private static BasicEffect effect;
 
         private const int MaxVertices = 3 * 20000;
-        private static VertexPositionColor[] vertices = new VertexPositionColor[3 * 1024];
+        private static VertexPositionColorTexture[] vertices = new VertexPositionColorTexture[3 * 1024];
         private static int vertexCount;
+
+        // the prototype disc: its edge (half transparent) is DiscRadius texels from the middle of a DiscTextureSize square
+        private const int DiscTextureSize = 512;
+        private const float DiscRadius = DiscTextureSize / 2f - 6f;
+        private static RenderTarget2D disc;
+        private static bool drawingPrototype;   // while the disc itself is being drawn (from triangles, without a texture)
+        private static readonly Vector2 White = new Vector2(0.5f);  // texture coordinate inside the disc: solid white
 
         // Minimum number of segments for a full circle; large circles get more so they stay round.
         public static int Segments = 16;
@@ -55,7 +68,35 @@ namespace LineLogisticsGame.Geometry
                     World = Matrix.Identity,
                     View = Matrix.Identity
                 };
+                DrawPrototype();
             };
+        }
+
+        // Draws the white disc every filled circle is made from, from triangles, into its render target.
+        // Its mipmaps keep small circles smooth: each size samples the level where a texel is about a screen pixel.
+        private static void DrawPrototype()
+        {
+            Flush();
+            disc = new RenderTarget2D(graphicsDevice, DiscTextureSize, DiscTextureSize, true, SurfaceFormat.Color, DepthFormat.None,
+                                      0, RenderTargetUsage.PreserveContents);
+            Matrix oldView = view;
+            float oldFeather = Feather;
+            view = Matrix.Identity;
+            scale = 1f;
+            Feather = 1.2f;
+            drawingPrototype = true;
+
+            graphicsDevice.SetRenderTarget(disc);
+            graphicsDevice.Clear(Color.Transparent);
+            Vector2 center = new Vector2(DiscTextureSize / 2f);
+            DrawFilledCircle(center, DiscRadius + Feather / 2f, 0, Color.White, Color.White);   // the edge fades out around DiscRadius
+            Flush();
+            graphicsDevice.SetRenderTarget(null);   // the mipmaps are made here
+
+            drawingPrototype = false;
+            Feather = oldFeather;
+            view = oldView;
+            scale = new Vector2(view.M11, view.M12).Length();
         }
 
         // Sends everything collected so far to the GPU.
@@ -67,10 +108,13 @@ namespace LineLogisticsGame.Geometry
             Viewport viewport = graphicsDevice.Viewport;
             effect.View = view;
             effect.Projection = Matrix.CreateOrthographicOffCenter(0, viewport.Width, viewport.Height, 0, 0, 1);
+            effect.TextureEnabled = !drawingPrototype;
+            effect.Texture = drawingPrototype ? null : disc;
 
             graphicsDevice.RasterizerState = RasterizerState.CullNone;
             graphicsDevice.BlendState = BlendState.AlphaBlend;
             graphicsDevice.DepthStencilState = DepthStencilState.None;
+            graphicsDevice.SamplerStates[0] = SamplerState.LinearClamp;
 
             foreach (var pass in effect.CurrentTechnique.Passes)
             {
@@ -88,9 +132,27 @@ namespace LineLogisticsGame.Geometry
                 Array.Resize(ref vertices, Math.Max(vertices.Length * 2, vertexCount + count));
         }
 
-        private static void Add(Vector2 position, Color color)
+        private static void Add(Vector2 position, Color color) => Add(position, color, White);
+
+        private static void Add(Vector2 position, Color color, Vector2 textureCoordinate)
         {
-            vertices[vertexCount++] = new VertexPositionColor(new Vector3(position, 0), color);
+            vertices[vertexCount++] = new VertexPositionColorTexture(new Vector3(position, 0), color, textureCoordinate);
+        }
+
+        // the prototype disc, tinted, with its edge at radius
+        private static void AddDisc(Vector2 center, float radius, Color color)
+        {
+            if (radius <= 0) return;
+            float half = radius * (DiscTextureSize / 2f) / DiscRadius;
+            Vector2 topLeft = center + new Vector2(-half, -half), topRight = center + new Vector2(half, -half);
+            Vector2 bottomLeft = center + new Vector2(-half, half), bottomRight = center + new Vector2(half, half);
+            Reserve(6);
+            Add(topLeft, color, Vector2.Zero);
+            Add(topRight, color, Vector2.UnitX);
+            Add(bottomLeft, color, Vector2.UnitY);
+            Add(bottomLeft, color, Vector2.UnitY);
+            Add(topRight, color, Vector2.UnitX);
+            Add(bottomRight, color, Vector2.One);
         }
 
         // Whether a box (corners in world units) is entirely off the screen.
@@ -115,6 +177,15 @@ namespace LineLogisticsGame.Geometry
 
             float innerRadius = radius - borderWidth;
             bool hasBorder = borderWidth > 0;
+
+            // from the prototype: the border is a disc in the border color with the fill disc on top of it,
+            // which only looks right when the fill hides what is under it
+            if (disc != null && !drawingPrototype && (!hasBorder || (fill.A == 255 && border.A == 255)))
+            {
+                if (hasBorder) AddDisc(center, radius, border);
+                AddDisc(center, hasBorder ? innerRadius : radius, fill);
+                return;
+            }
             if (innerRadius > 0)
             {
                 // with a border the fill runs solid up to it; without one it fades out at the edge
