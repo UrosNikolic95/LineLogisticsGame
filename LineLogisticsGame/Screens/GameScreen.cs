@@ -14,6 +14,7 @@ using LineLogisticsGame.World;
 namespace LineLogisticsGame.Screens
 {
     // Line drawing editor. Tools and actions are picked from the palette on the right.
+    // The Stats button next to Menu opens the statistics (see StatsScreen).
     // Producer builds stations for the resource selected on the palette; what it needs is shown under the status line.
     // Consumer builds stations that consume every resource.
     // Keyboard shortcuts:
@@ -34,11 +35,16 @@ namespace LineLogisticsGame.Screens
         public LineDrawing Drawing => drawing;
         public Camera Camera => camera;
         public Rectangle MenuButton => menuButton;
+        public Rectangle StatsButton => statsButton;
         private readonly TransportSystem transport;
         private readonly Action openMenu;   // the in-game menu (Menu button or Esc)
+        private readonly Action openStats;  // the statistics (Stats button)
         private const int MenuButtonWidth = 70, MenuButtonHeight = 24;
         private Rectangle menuButton;
         private bool menuButtonHovered;
+        private const int StatsButtonWidth = 70;
+        private Rectangle statsButton;
+        private bool statsButtonHovered;
         private readonly ITool[] tools;
         private readonly ToolPalette palette;
         private ITool currentTool;
@@ -61,10 +67,11 @@ namespace LineLogisticsGame.Screens
         private readonly List<PointsPopup> popups = new List<PointsPopup>();
         private const float PopupLife = 1.2f, PopupRise = 40f;  // seconds shown, screen pixels risen over that time
 
-        public GameScreen(TransportSystem transport, Action openMenu)
+        public GameScreen(TransportSystem transport, Action openMenu, Action openStats)
         {
             this.transport = transport;
             this.openMenu = openMenu;
+            this.openStats = openStats;
             transport.PointsEarned = (position, points) => popups.Add(new PointsPopup { Position = position, Text = $"+{points:N0}" });
 
             var transporterTool = new TransporterTool(transport);
@@ -171,11 +178,13 @@ namespace LineLogisticsGame.Screens
 
             menuButton = new Rectangle(viewport.Width - ToolPalette.Width - MenuButtonWidth - 6, 4, MenuButtonWidth, MenuButtonHeight);
             menuButtonHovered = menuButton.Contains(input.ScreenMousePosition);
+            statsButton = new Rectangle(menuButton.X - StatsButtonWidth - 6, 4, StatsButtonWidth, MenuButtonHeight);
+            statsButtonHovered = statsButton.Contains(input.ScreenMousePosition);
 
             if (isActive)
             {
-                // Clicks on the palette and the menu button never reach the tool, but a drag that is already in progress keeps going.
-                bool overPalette = palette.Contains(input.ScreenMousePosition) || menuButtonHovered;
+                // Clicks on the palette and the menu and stats buttons never reach the tool, but a drag that is already in progress keeps going.
+                bool overPalette = palette.Contains(input.ScreenMousePosition) || menuButtonHovered || statsButtonHovered;
                 palette.Update(input, !currentTool.IsBusy);
                 // a right click the tool doesn't use itself deselects it
                 if (!overPalette && input.RightPressed && !currentTool.UsesRightClick(input))
@@ -183,8 +192,15 @@ namespace LineLogisticsGame.Screens
                 else if (!overPalette || currentTool.IsBusy)
                     currentTool.Update(input, drawing);
                 if (menuButtonHovered && input.LeftPressed && !currentTool.IsBusy) openMenu();
+                if (statsButtonHovered && input.LeftPressed && !currentTool.IsBusy) openStats();
             }
 
+            Simulate(gameTime);
+        }
+
+        // Runs the transport game without taking any input: every frame, and on its own while the statistics are open over it.
+        public void Simulate(GameTime gameTime)
+        {
             transport.Update(gameTime, drawing);
 
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
@@ -243,7 +259,7 @@ namespace LineLogisticsGame.Screens
             DrawShape.Feather = feather * drawing.PixelSize;
             drawing.Draw();
             transport.Draw(drawing);
-            if (currentTool.IsBusy || (!palette.Contains(input.ScreenMousePosition) && !menuButtonHovered))
+            if (currentTool.IsBusy || (!palette.Contains(input.ScreenMousePosition) && !menuButtonHovered && !statsButtonHovered))
                 currentTool.Draw(input, drawing);
             DrawShape.View = Matrix.Identity;
             DrawShape.Feather = feather;
@@ -337,11 +353,13 @@ namespace LineLogisticsGame.Screens
             DrawShape.DrawFilledRectangle(new Rectangle(0, 0, viewport.Width - ToolPalette.Width, barHeight), Color.Black * 0.6f);
 
             Button.DrawBox(menuButton, menuButtonHovered);
+            Button.DrawBox(statsButton, statsButtonHovered);
 
             DrawShape.Flush();
             spriteBatch.Begin();
             spriteBatch.DrawString(font, status, new Vector2(padding + 4, padding), Color.White);
             Button.DrawLabel(spriteBatch, font, menuButton, "Menu");
+            Button.DrawLabel(spriteBatch, font, statsButton, "Stats");
             spriteBatch.End();
             return barHeight;
         }

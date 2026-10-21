@@ -15,6 +15,7 @@ namespace LineLogisticsGame
     // Starts on the splash screen, then the menu. New game opens the recipe screen, where the player picks what each resource
     // is made of; Start opens the game screen. Continue loads the most recent save, Load game lets the player pick one.
     // While playing, the Menu button (or Esc) opens the in-game menu: Back, Save, Main menu, Quit; Back, Esc or the Menu button closes it.
+    // The Stats button next to it opens the statistics over the running game; Close, Esc or the Stats button closes them.
     // A game is saved to its own file when it starts, on F5 or Save, when leaving it for the main menu and when the window closes.
     public class AppGame : Game
     {
@@ -33,6 +34,8 @@ namespace LineLogisticsGame
         private LoadGameScreen loadGameScreen;
         private MenuScreen gameMenu;        // in-game menu, over the paused game
         private bool gameMenuOpen;
+        private StatsScreen statsScreen;    // statistics, over the running game
+        private bool statsOpen;
 
         // the game being set up or played
         private TransportSystem transport;
@@ -115,10 +118,12 @@ namespace LineLogisticsGame
 
         private void StartNewGame()
         {
-            gameScreen = new GameScreen(transport, () => gameMenuOpen = true);
+            gameScreen = new GameScreen(transport, () => gameMenuOpen = true, () => statsOpen = true);
+            statsScreen = new StatsScreen(transport, gameScreen.Drawing, () => statsOpen = false);
             savePath = SaveGame.NewPath();
             state = State.Playing;
             gameMenuOpen = false;
+            statsOpen = false;
             Save(false);
         }
 
@@ -140,11 +145,13 @@ namespace LineLogisticsGame
             {
                 SaveGame save = SaveGame.Read(path);
                 transport = new TransportSystem();
-                gameScreen = new GameScreen(transport, () => gameMenuOpen = true);
+                gameScreen = new GameScreen(transport, () => gameMenuOpen = true, () => statsOpen = true);
+                statsScreen = new StatsScreen(transport, gameScreen.Drawing, () => statsOpen = false);
                 save.Apply(transport, gameScreen);
                 savePath = path;
                 state = State.Playing;
                 gameMenuOpen = false;
+                statsOpen = false;
             }
             catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is System.Text.Json.JsonException
                                       || e is InvalidDataException || e is ArgumentOutOfRangeException || e is IndexOutOfRangeException)
@@ -242,6 +249,18 @@ namespace LineLogisticsGame
                             else gameMenu.Update(input);
                         }
                     }
+                    else if (statsOpen)
+                    {
+                        // the game keeps running behind it, without input; Close, Esc or the Stats button closes it
+                        gameScreen.Simulate(gameTime);
+                        statsScreen.Layout(viewport.Width, viewport.Height);
+                        if (IsActive)
+                        {
+                            if (input.LeftPressed && gameScreen.StatsButton.Contains(input.ScreenMousePosition))
+                                statsOpen = false;
+                            else statsScreen.Update(input);
+                        }
+                    }
                     else
                     {
                         if (IsActive && input.KeyPressed(Keys.F5)) Save(true);
@@ -270,6 +289,11 @@ namespace LineLogisticsGame
                     {
                         DrawShape.DrawFilledRectangle(new Rectangle(0, 0, viewport.Width, viewport.Height), Color.Black * 0.6f);
                         gameMenu.Draw(_spriteBatch, font, titleFont);
+                    }
+                    else if (statsOpen)
+                    {
+                        DrawShape.DrawFilledRectangle(new Rectangle(0, 0, viewport.Width, viewport.Height), Color.Black * 0.5f);
+                        statsScreen.Draw(_spriteBatch, font);
                     }
                     break;
             }

@@ -32,6 +32,7 @@ namespace LineLogisticsGame.Simulation
         public bool Paused = false;
         public long Points;  // earned for every resource a consumer line consumes (see ResourceRecipes.PointsOf)
         public Action<Vector2, long> PointsEarned;  // where a resource was consumed and the points it earned
+        public Statistics Statistics = new Statistics();    // what was produced, consumed and earned over time
 
         public List<Resource> Resources = new List<Resource>();
         public List<Transporter> Transporters = new List<Transporter>();
@@ -150,6 +151,7 @@ namespace LineLogisticsGame.Simulation
             {
                 float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
                 UpdateTimers(drawing, dt);
+                Statistics.Advance(dt, Points);
                 RescheduleAll();    // a new resource takes over from the first scheduled one
                 MoveAll(dt);
                 foreach (var transporter in Transporters.ToList())
@@ -219,7 +221,11 @@ namespace LineLogisticsGame.Simulation
                 taken.Add(resource);
             }
 
-            foreach (var resource in taken) RemoveResource(resource);
+            foreach (var resource in taken)
+            {
+                RemoveResource(resource);
+                Statistics.Consumed(resource.Type);
+            }
             return TrySpawn(segment, segment.Type);
         }
 
@@ -237,6 +243,7 @@ namespace LineLogisticsGame.Simulation
         {
             if (SpawnDistance(segment) is not float at) return false;
             AddResource(new Resource { Type = type, Segment = segment, Distance = at, Position = PositionOn(segment, at) });
+            Statistics.Produced(type);
             return true;
         }
 
@@ -281,6 +288,7 @@ namespace LineLogisticsGame.Simulation
             Resource oldest = OldestOn(segment);
             if (oldest == null) return false;
             RemoveResource(oldest);
+            Statistics.Consumed(oldest.Type);
             long points = Recipes.PointsOf(oldest.Type);
             Points += points;
             PointsEarned?.Invoke(oldest.Position, points);
@@ -778,6 +786,8 @@ namespace LineLogisticsGame.Simulation
                 line.FreeCount -= count;
                 line.DeliveredAtB = atB;
             }
+            Statistics.Transported(t.CargoType, count);
+            if (t.DropReserved == 0) Statistics.Trip();    // a trip ends when the whole delivery is unloaded
             return t.DropReserved == 0;
         }
 
